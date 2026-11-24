@@ -93,8 +93,35 @@
 
   // <img> that falls back to a placeholder on error
   U.img = function (src, cls, alt) {
+    src = U.imgUrl ? U.imgUrl(src) : src;
     if (!src) return '';
     return '<img ' + (cls ? 'class="' + cls + '" ' : '') + 'src="' + U.esc(src) + '" alt="' + U.esc(alt || '') + '" loading="lazy" onerror="this.remove()">';
+  };
+
+  // Clean an image URL coming from the provider ("null", empty, relative...)
+  U.imgUrl = function (s) {
+    s = String(s == null ? '' : s).trim();
+    if (!s || s === 'null' || s === 'undefined' || s === '0') return '';
+    if (/^\/\//.test(s)) return 'http:' + s;
+    if (/^https?:\/\//i.test(s)) return s;
+    if (/^\//.test(s) && window.API && API.account) return API.account.server + s;
+    return '';
+  };
+  // <img> trying several URLs in order: the next one is used when one fails to load
+  U.imgChain = function (list, cls) {
+    var seen = {}, urls = [];
+    (list || []).forEach(function (x) {
+      (Array.isArray(x) ? x : [x]).forEach(function (y) { var u = U.imgUrl(y); if (u && !seen[u]) { seen[u] = 1; urls.push(u); } });
+    });
+    if (!urls.length) return '';
+    return '<img ' + (cls ? 'class="' + cls + '" ' : '') + 'src="' + U.esc(urls[0]) + '" data-next="' + U.esc(JSON.stringify(urls.slice(1))) + '" alt="" loading="lazy" onerror="U.imgNext(this)">';
+  };
+  U.imgNext = function (img) {
+    var rest = [];
+    try { rest = JSON.parse(img.getAttribute('data-next') || '[]'); } catch (e) { }
+    if (!rest.length) { img.remove(); return; }
+    img.setAttribute('data-next', JSON.stringify(rest.slice(1)));
+    img.src = rest[0];
   };
 
   U.debounce = function (fn, ms) {

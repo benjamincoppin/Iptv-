@@ -277,6 +277,17 @@
       var eps = data.episodes || {};
       if (Array.isArray(eps)) { var o = {}; eps.forEach(function (arr) { if (arr && arr[0]) o[arr[0].season] = arr; }); eps = o; }
       var seasons = Object.keys(eps).sort(function (a, b) { return +a - +b; });
+      // Season posters provided by the server (used when an episode has no picture of its own)
+      var seasonImg = {};
+      (Array.isArray(data.seasons) ? data.seasons : []).forEach(function (se) {
+        if (!se) return;
+        var n = se.season_number != null ? se.season_number : se.season;
+        seasonImg[String(n)] = [se.cover_big, se.cover, se.cover_tmdb, se.overview_image];
+      });
+      function epImages(item) {
+        var ei = item.e.info || {};
+        return [ei.movie_image, ei.cover_big, ei.cover, ei.still_path, item.e.stream_icon, item.e.cover, seasonImg[String(item.s)], info.backdrop_path, backdrop, cover];
+      }
       var flat = [];
       seasons.forEach(function (s) { (eps[s] || []).slice().sort(function (a, b) { return +a.episode_num - +b.episode_num; }).forEach(function (e) { flat.push({ s: s, e: e }); }); });
       var last = Hist.lastEpisode(sid);
@@ -291,7 +302,7 @@
           kind: 'episode', url: API.episodeUrl(e.id, e.container_extension),
           title: name, sub: 'S' + item.s + ' · É' + e.episode_num + (e.title ? ' · ' + epTitle(e) : ''),
           startMs: start,
-          hist: { type: 'episode', id: e.id, name: epTitle(e), img: ei.movie_image || backdrop, ext: e.container_extension, seriesId: sid, seriesName: name, season: item.s, ep: e.episode_num },
+          hist: { type: 'episode', id: e.id, name: epTitle(e), img: U.imgUrl(ei.movie_image) || U.imgUrl(ei.cover_big) || (seasonImg[String(item.s)] || []).map(U.imgUrl).filter(Boolean)[0] || U.imgUrl(backdrop) || U.imgUrl(cover), ext: e.container_extension, seriesId: sid, seriesName: name, season: item.s, ep: e.episode_num },
           next: flat[idx + 1] ? function () { var o = epOpts(flat[idx + 1]); o.startMs = 0; return o; } : null
         };
       }
@@ -340,7 +351,7 @@
           var e = it.e, ei = e.info || {}, hh = Hist.get('episode', e.id);
           var pct = hh && hh.dur ? Math.min(100, Math.round(hh.pos / hh.dur * 100)) : 0;
           var dur = ei.duration_secs ? U.minutesLabel(ei.duration_secs / 60) : U.hmsLabel(ei.duration);
-          return '<button class="f ep" data-e="' + e.id + '" data-key="e' + e.id + '"><div class="eimg">' + U.img(ei.movie_image) + (pct ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') + '</div>' +
+          return '<button class="f ep" data-e="' + e.id + '" data-key="e' + e.id + '"><div class="eimg">' + U.imgChain(epImages(it)) + (pct ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') + '</div>' +
             '<div style="min-width:0"><div class="et">' + U.esc(e.episode_num + '. ' + epTitle(e)) + '</div><div class="ed">' + U.esc([dur, pct >= 94 ? 'Vu' : pct ? 'En cours' : ''].filter(Boolean).join(' · ')) + (ei.plot ? ' — ' + U.esc(ei.plot) : '') + '</div></div></button>';
         }).join('') : '<div class="empty">Aucun épisode.</div>';
         U.$$('.ep', box).forEach(function (b) {
