@@ -474,6 +474,7 @@
       row('aspectVod', 'Format d\'image · Films et séries', 'Original, 16:9, 4:3, étirer ou zoom', Aspect.labels[Aspect.get('vod')]) +
       row('tmdb', 'Images des épisodes (TMDB)', 'Clé API TMDB pour les images et résumés manquants', TMDB.enabled() ? 'Activé' : 'Désactivé') +
       row('autoNext', 'Épisode suivant automatique', 'Enchaîne les épisodes d\'une série', s.autoNext ? 'Oui' : 'Non') +
+      row('diag', 'Diagnostic', 'Journal technique à m\'envoyer en cas de problème', '') +
       row('reload', 'Recharger les listes', 'Récupère les nouvelles chaînes, films et séries', '') +
       row('clearHist', 'Effacer l\'historique', 'Vide « Reprendre la lecture » et les chaînes récentes', '') +
       row('logout', 'Se déconnecter', 'Change de compte ou de serveur', '') +
@@ -494,6 +495,7 @@
           TMDB.get('/configuration').then(function () { U.toast('Clé TMDB valide'); }, function () { U.toast('Clé TMDB refusée, vérifie-la'); });
           App.refresh();
         });
+        else if (k === 'diag') App.showReport('Diagnostic IPTV+', 'IPTV+ ' + Native.version() + '\n\n' + (Native.journal() || '(journal vide)'));
         else if (k === 'autoNext') { Settings.set('autoNext', !Settings.get('autoNext')); App.refresh(); }
         else if (k === 'reload') { API.cache = {}; API.epgCache = {}; API.refreshInfo().catch(function () { }); U.toast('Listes rechargées'); }
         else if (k === 'clearHist') { Hist.clear(); U.toast('Historique effacé'); }

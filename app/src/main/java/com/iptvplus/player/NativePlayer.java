@@ -2,6 +2,9 @@ package com.iptvplus.player;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.HandlerThread;
+import android.os.Looper;
 import android.view.View;
 import android.widget.FrameLayout;
 
@@ -16,131 +19,238 @@ import java.util.ArrayList;
 import java.util.Map;
 
 /**
- * Video player built on LibVLC (official VideoLAN library): decodes every common audio
- * format in software (AC3, E-AC3, DTS, TrueHD…) and handles picture format (ratio / stretch / zoom).
+ * Video player built on LibVLC (official VideoLAN library).
+ *
+ * Stability rules:
+ *  - every LibVLC control call (play, stop, seek, tracks…) runs on ONE dedicated background thread,
+ *    so a slow network stop/start can never freeze the UI (which Android kills as "not responding");
+ *  - position / duration / tracks are cached from events, never read synchronously from the UI;
+ *  - the video output is detached when the app goes to the background and re-attached on return,
+ *    so LibVLC never draws on a destroyed surface.
  */
 public class NativePlayer {
 
     public interface Listener { void onPlayerEvent(String type, String json); }
 
+    private final Context ctx;
     private final FrameLayout box;
     private final Listener listener;
-    private final LibVLC vlc;
-    private final MediaPlayer mp;
-    private final VLCVideoLayout layout;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final HandlerThread thread;
+    private final Handler worker;
 
-    private boolean prepared = false;
-    private boolean buffering = false;
-    private boolean active = false;
+    private LibVLC vlc;
+    private MediaPlayer mp;
+    private VLCVideoLayout layout;
+
+    private volatile boolean prepared = false;
+    private volatile boolean buffering = false;
+    private volatile boolean playing = false;
+    private volatile long time = 0, length = 0;
+    private volatile String tracksJson = "[]";
+    private volatile int generation = 0;
+    private volatile boolean attached = false;
+    private volatile boolean released = false;
     private String aspect = "auto";
 
     public NativePlayer(Context ctx, FrameLayout box, Listener listener) {
+        this.ctx = ctx.getApplicationContext();
         this.box = box;
         this.listener = listener;
+        thread = new HandlerThread("iptvplus-vlc");
+        thread.start();
+        worker = new Handler(thread.getLooper());
+
+        layout = new VLCVideoLayout(ctx);
+        box.addView(layout, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
         ArrayList<String> opts = new ArrayList<String>();
         opts.add("--http-reconnect");
         opts.add("--audio-time-stretch");
         opts.add("--no-stats");
         opts.add("--no-sub-autodetect-file");
-        vlc = new LibVLC(ctx, opts);
+        opts.add("--avcodec-skiploopfilter=1");
+        vlc = new LibVLC(this.ctx, opts);
         mp = new MediaPlayer(vlc);
-
-        layout = new VLCVideoLayout(ctx);
-        box.addView(layout, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-        mp.attachViews(layout, null, false, false);
-        applyAspect();
-
         mp.setEventListener(new MediaPlayer.EventListener() {
-            @Override public void onEvent(MediaPlayer.Event ev) {
-                if (!active) return;
-                switch (ev.type) {
-                    case MediaPlayer.Event.Opening:
-                        buffering = true;
-                        emit("buffering", null);
-                        break;
-                    case MediaPlayer.Event.Buffering:
-                        boolean b = ev.getBuffering() < 100f;
-                        if (b != buffering) { buffering = b; emit(b ? "buffering" : "buffered", null); }
-                        break;
-                    case MediaPlayer.Event.Playing:
-                        buffering = false;
-                        if (!prepared) {
-                            prepared = true;
-                            JSONObject o = new JSONObject();
-                            try { o.put("duration", duration()); } catch (Exception ignored) { }
-                            emit("prepared", o.toString());
-                        } else emit("buffered", null);
-                        break;
-                    case MediaPlayer.Event.Vout:
-                        if (ev.getVoutCount() > 0) { buffering = false; emit("rendering", null); }
-                        break;
-                    case MediaPlayer.Event.EndReached:
-                        emit("completed", null);
-                        break;
-                    case MediaPlayer.Event.EncounteredError:
-                        prepared = false;
-                        emit("error", "{\"what\":1,\"extra\":0}");
-                        break;
-                    default:
-                        break;
+            @Override public void onEvent(MediaPlayer.Event ev) { onVlcEvent(ev); }
+        });
+        attachViews();
+    }
+
+    // ---------- events (delivered on the main thread by LibVLC) ----------
+    private void onVlcEvent(MediaPlayer.Event ev) {
+        if (released) return;
+        final int gen = generation;
+        switch (ev.type) {
+            case MediaPlayer.Event.Opening:
+                buffering = true;
+                emit("buffering", null);
+                break;
+            case MediaPlayer.Event.Buffering:
+                boolean b = ev.getBuffering() < 100f;
+                if (b != buffering) { buffering = b; emit(b ? "buffering" : "buffered", null); }
+                break;
+            case MediaPlayer.Event.Playing:
+                playing = true;
+                buffering = false;
+                if (!prepared) {
+                    prepared = true;
+                    JSONObject o = new JSONObject();
+                    try { o.put("duration", length); } catch (Exception ignored) { }
+                    emit("prepared", o.toString());
+                } else emit("buffered", null);
+                refreshTracks(gen);
+                break;
+            case MediaPlayer.Event.Paused:
+                playing = false;
+                break;
+            case MediaPlayer.Event.Stopped:
+                playing = false;
+                break;
+            case MediaPlayer.Event.TimeChanged:
+                time = ev.getTimeChanged();
+                break;
+            case MediaPlayer.Event.LengthChanged:
+                length = ev.getLengthChanged();
+                break;
+            case MediaPlayer.Event.ESAdded:
+                refreshTracks(gen);
+                break;
+            case MediaPlayer.Event.Vout:
+                if (ev.getVoutCount() > 0) { buffering = false; emit("rendering", null); }
+                break;
+            case MediaPlayer.Event.EndReached:
+                playing = false;
+                emit("completed", null);
+                break;
+            case MediaPlayer.Event.EncounteredError:
+                playing = false;
+                prepared = false;
+                emit("error", "{\"what\":1,\"extra\":0}");
+                break;
+            default:
+                break;
+        }
+    }
+
+    // ---------- controls (all on the worker thread) ----------
+    public void play(final String url, final int startMs, final Map<String, String> headers) {
+        final int gen = ++generation;
+        prepared = false; buffering = true; playing = false;
+        time = 0; length = 0; tracksJson = "[]";
+        box.setVisibility(View.VISIBLE);
+        worker.removeCallbacksAndMessages(null);
+        worker.post(new Runnable() {
+            @Override public void run() {
+                if (released || gen != generation) return;
+                try {
+                    if (mp.isPlaying() || mp.getMedia() != null) mp.stop();
+                    if (gen != generation) return;
+                    Media m = new Media(vlc, Uri.parse(url));
+                    m.setHWDecoderEnabled(true, false);
+                    boolean live = url.contains("/live/");
+                    m.addOption(":network-caching=" + (live ? 2500 : 3000));
+                    m.addOption(":http-reconnect");
+                    if (headers != null && headers.get("User-Agent") != null) m.addOption(":http-user-agent=" + headers.get("User-Agent"));
+                    if (startMs > 0) m.addOption(":start-time=" + (startMs / 1000.0));
+                    mp.setMedia(m);
+                    m.release();
+                    if (gen != generation) return;
+                    mp.play();
+                    ui.post(new Runnable() { @Override public void run() { applyAspectNow(); } });
+                } catch (Throwable t) {
+                    Diag.log("play error: " + t);
+                    emit("error", "{\"what\":-1,\"extra\":0}");
                 }
             }
         });
     }
 
-    public void play(String url, int startMs, Map<String, String> headers) {
-        prepared = false;
-        buffering = true;
-        active = true;
-        box.setVisibility(View.VISIBLE);
-        try {
-            mp.stop();
-            Media m = new Media(vlc, Uri.parse(url));
-            m.setHWDecoderEnabled(true, false);
-            boolean live = url.contains("/live/");
-            m.addOption(":network-caching=" + (live ? 2000 : 3000));
-            if (headers != null && headers.get("User-Agent") != null) m.addOption(":http-user-agent=" + headers.get("User-Agent"));
-            if (startMs > 0) m.addOption(":start-time=" + (startMs / 1000.0));
-            mp.setMedia(m);
-            m.release();
-            mp.play();
-            applyAspect();
-        } catch (Exception e) {
-            emit("error", "{\"what\":-1,\"extra\":0}");
-        }
+    public void stop() {
+        ++generation;
+        prepared = false; playing = false; buffering = false;
+        box.setVisibility(View.INVISIBLE);
+        worker.removeCallbacksAndMessages(null);
+        worker.post(new Runnable() {
+            @Override public void run() {
+                if (released) return;
+                try { mp.stop(); } catch (Throwable t) { Diag.log("stop error: " + t); }
+            }
+        });
     }
 
-    public void stop() {
-        active = false;
-        prepared = false;
-        try { mp.stop(); } catch (Exception ignored) { }
-        box.setVisibility(View.INVISIBLE);
+    public void pause() {
+        worker.post(new Runnable() { @Override public void run() { try { if (!released && mp.isPlaying()) mp.pause(); } catch (Throwable ignored) { } } });
+        playing = false;
+    }
+
+    public void resume() {
+        worker.post(new Runnable() { @Override public void run() { try { if (!released && mp.getMedia() != null) mp.play(); } catch (Throwable ignored) { } } });
+    }
+
+    public void seekTo(final int ms) {
+        time = ms;
+        worker.post(new Runnable() { @Override public void run() { try { if (!released) mp.setTime(ms); } catch (Throwable ignored) { } } });
+    }
+
+    public boolean isPrepared() { return prepared; }
+    public boolean isBuffering() { return buffering; }
+    public boolean isPlaying() { return playing; }
+    public int position() { return (int) Math.max(0, time); }
+    public int duration() { return (int) Math.max(0, length); }
+
+    // ---------- background / foreground ----------
+    /** Call from Activity.onStop: free the surface before Android destroys it. */
+    public void onBackground() {
+        worker.post(new Runnable() { @Override public void run() { try { if (!released && mp.isPlaying()) mp.pause(); } catch (Throwable ignored) { } } });
+        ui.post(new Runnable() { @Override public void run() { detachViews(); } });
+    }
+
+    /** Call from Activity.onStart. */
+    public void onForeground() {
+        ui.post(new Runnable() { @Override public void run() { attachViews(); } });
+    }
+
+    private void attachViews() {
+        if (released || attached) return;
+        try { mp.attachViews(layout, null, false, false); attached = true; applyAspectNow(); }
+        catch (Throwable t) { Diag.log("attachViews: " + t); }
+    }
+
+    private void detachViews() {
+        if (released || !attached) return;
+        try { mp.detachViews(); } catch (Throwable t) { Diag.log("detachViews: " + t); }
+        attached = false;
     }
 
     public void release() {
-        stop();
-        try { mp.detachViews(); } catch (Exception ignored) { }
-        try { mp.release(); } catch (Exception ignored) { }
-        try { vlc.release(); } catch (Exception ignored) { }
+        if (released) return;
+        ++generation;
+        detachViews();
+        released = true;
+        worker.removeCallbacksAndMessages(null);
+        final MediaPlayer p = mp;
+        final LibVLC v = vlc;
+        worker.post(new Runnable() {
+            @Override public void run() {
+                try { p.setEventListener(null); } catch (Throwable ignored) { }
+                try { p.stop(); } catch (Throwable ignored) { }
+                try { p.release(); } catch (Throwable ignored) { }
+                try { v.release(); } catch (Throwable ignored) { }
+                thread.quitSafely();
+            }
+        });
     }
-
-    public void pause() { try { if (mp.isPlaying()) mp.pause(); } catch (Exception ignored) { } }
-    public void resume() { try { mp.play(); } catch (Exception ignored) { } }
-    public void seekTo(int ms) { try { mp.setTime(ms); } catch (Exception ignored) { } }
-    public boolean isPrepared() { return prepared; }
-    public boolean isBuffering() { return buffering; }
-    public boolean isPlaying() { try { return mp.isPlaying(); } catch (Exception e) { return false; } }
-    public int position() { try { long t = mp.getTime(); return t < 0 ? 0 : (int) t; } catch (Exception e) { return 0; } }
-    public int duration() { try { long d = mp.getLength(); return d < 0 ? 0 : (int) d; } catch (Exception e) { return 0; } }
 
     // ---------- picture format ----------
     public void setAspect(String mode) {
         aspect = mode == null ? "auto" : mode;
-        applyAspect();
+        ui.post(new Runnable() { @Override public void run() { applyAspectNow(); } });
     }
 
-    private void applyAspect() {
+    private void applyAspectNow() {
+        if (released) return;
         try {
             MediaPlayer.ScaleType t;
             if ("16:9".equals(aspect)) t = MediaPlayer.ScaleType.SURFACE_16_9;
@@ -150,32 +260,48 @@ public class NativePlayer {
             else if ("original".equals(aspect)) t = MediaPlayer.ScaleType.SURFACE_ORIGINAL;
             else t = MediaPlayer.ScaleType.SURFACE_BEST_FIT;
             mp.setVideoScale(t);
-        } catch (Exception ignored) { }
+        } catch (Throwable ignored) { }
     }
 
     // ---------- audio tracks ----------
-    public String audioTracks() {
-        JSONArray arr = new JSONArray();
-        try {
-            MediaPlayer.TrackDescription[] t = mp.getAudioTracks();
-            int cur = mp.getAudioTrack();
-            if (t != null) {
-                for (MediaPlayer.TrackDescription d : t) {
-                    if (d.id < 0) continue; // "Désactiver"
-                    JSONObject o = new JSONObject();
-                    o.put("index", d.id);
-                    o.put("lang", d.name);
-                    o.put("selected", d.id == cur);
-                    arr.put(o);
-                }
+    private void refreshTracks(final int gen) {
+        worker.post(new Runnable() {
+            @Override public void run() {
+                if (released || gen != generation) return;
+                JSONArray arr = new JSONArray();
+                try {
+                    MediaPlayer.TrackDescription[] t = mp.getAudioTracks();
+                    int cur = mp.getAudioTrack();
+                    if (t != null) {
+                        for (MediaPlayer.TrackDescription d : t) {
+                            if (d.id < 0) continue;
+                            JSONObject o = new JSONObject();
+                            o.put("index", d.id);
+                            o.put("lang", d.name);
+                            o.put("selected", d.id == cur);
+                            arr.put(o);
+                        }
+                    }
+                } catch (Throwable ignored) { }
+                tracksJson = arr.toString();
             }
-        } catch (Exception ignored) { }
-        return arr.toString();
+        });
     }
 
-    public void selectAudio(int id) {
-        try { mp.setAudioTrack(id); } catch (Exception ignored) { }
+    public String audioTracks() { return tracksJson; }
+
+    public void selectAudio(final int id) {
+        final int gen = generation;
+        worker.post(new Runnable() {
+            @Override public void run() {
+                try { if (!released) mp.setAudioTrack(id); } catch (Throwable ignored) { }
+            }
+        });
+        refreshTracks(gen);
     }
 
-    private void emit(String type, String json) { listener.onPlayerEvent(type, json); }
+    private void emit(String type, String json) {
+        if (!"buffering".equals(type) && !"buffered".equals(type)) Diag.log("player " + type + (json != null ? " " + json : ""));
+        listener.onPlayerEvent(type, json);
+    }
 }

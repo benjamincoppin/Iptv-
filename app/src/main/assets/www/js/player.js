@@ -291,6 +291,15 @@
 
   P.close = function () {
     if (!P.open) return;
+    try { closeInner(); } catch (e) {
+      try { Native.log('player close: ' + e.message); Native.stop(); } catch (e2) { }
+      P.open = false; NativeEvents.owner = null; Nav.handler = null;
+      var ly = document.getElementById('layer'); Nav.popRoot(ly); ly.classList.remove('on'); ly.innerHTML = '';
+      document.documentElement.classList.remove('playing');
+      if (window.App) App.go(App.route || 'home');
+    }
+  };
+  function closeInner() {
     readState();
     if (!ended && state.pos > 0) saveHist(state.pos, state.dur);
     clearInterval(poll); clearInterval(saveTimer); clearInterval(nextTimer); clearTimeout(idleTimer);
@@ -307,7 +316,7 @@
     var cb = opts && opts.onClose; opts = null;
     if (window.App) App.afterOverlay(P._prevFocus);
     if (cb) cb();
-  };
+  }
 
   P.back = function () {
     if (Modal.isOpen()) { Modal.close(); return true; }

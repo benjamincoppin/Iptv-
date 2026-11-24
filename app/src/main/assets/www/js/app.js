@@ -108,6 +108,26 @@
 
   // Returns true when handled; false lets Android close the app.
   App.back = function () {
+    try { return backInner(); } catch (e) {
+      try { Native.log('back: ' + e.message); } catch (e2) { }
+      App.recover();
+      return true;
+    }
+  };
+  // Bring the interface back to a usable state after an unexpected error (never leave a black screen)
+  App.recover = function () {
+    try { if (Modal.isOpen()) Modal.close(); } catch (e) { }
+    try { if (Player.open) Player.close(); } catch (e) { }
+    try { if (Live.open) Live.close(); } catch (e) { }
+    var layer = document.getElementById('layer');
+    layer.classList.remove('on'); layer.innerHTML = '';
+    document.documentElement.classList.remove('playing');
+    Nav.roots.length = 0; Nav.handler = null;
+    try { Native.stop(); } catch (e) { }
+    App.go(App.route && App.route !== 'login' ? App.route : 'home');
+  };
+  function backInner() {
+    if (Modal._report) { var r = Modal._report; Modal._report = null; r(); return true; }
     if (Modal.isOpen()) { Modal.close(); return true; }
     if (Player.open) return Player.back();
     if (Live.open) return Live.back();
@@ -125,7 +145,7 @@
     exitArmed = now;
     U.toast('Appuie encore sur Retour pour quitter');
     return true;
-  };
+  }
 
   App.mediaKey = function (k) {
     if (Player.open) return Player.mediaKey(k);
@@ -160,11 +180,42 @@
 
   window.App = App;
 
+  // ---------- errors & crash report ----------
+  window.addEventListener('error', function (e) {
+    try { Native.log((e.message || 'erreur') + ' @' + String(e.filename || '').replace(/.*\//, '') + ':' + e.lineno); } catch (x) { }
+  });
+  window.addEventListener('unhandledrejection', function (e) {
+    try { Native.log('promesse: ' + (e.reason && e.reason.message || e.reason)); } catch (x) { }
+  });
+
+  App.showReport = function (title, text) {
+    var host = document.getElementById('layer');
+    var standalone = !host.classList.contains('on');
+    if (standalone) host.classList.add('on');
+    var bg = U.html('<div class="modal-bg"><div class="modal nav-group" style="max-width:640px"><h3>' + U.esc(title) + '</h3>' +
+      '<pre style="white-space:pre-wrap;font-size:11px;line-height:1.4;background:#111;padding:10px;border-radius:8px;max-height:46vh;overflow:auto;color:var(--soft)">' + U.esc(text || '(vide)') + '</pre>' +
+      '<div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap"><button class="f btn primary" data-r="share">Envoyer / copier le rapport</button><button class="f btn" data-r="close">Fermer</button></div></div></div>');
+    host.appendChild(bg);
+    var prevH = Nav.handler; Nav.handler = null;
+    Nav.pushRoot(bg);
+    function close() { Nav.popRoot(bg); bg.remove(); if (standalone) host.classList.remove('on'); Nav.handler = prevH; Nav.first(null, document.getElementById('page')); }
+    U.$('[data-r="share"]', bg).onclick = function () { Native.share(text); U.toast('Rapport prêt à être envoyé'); };
+    U.$('[data-r="close"]', bg).onclick = close;
+    Modal._report = close;
+    Nav.focus(U.$('[data-r="close"]', bg));
+  };
+
   // ---------- boot ----------
   var tv = false;
   try { tv = Native.isTv(); } catch (e) { }
   document.body.classList.toggle('tv', tv);
   if (tv) document.body.classList.add('kbd');
+
+  setTimeout(function () {
+    var crash = '';
+    try { crash = Native.lastCrash(); } catch (e) { }
+    if (crash) App.showReport('IPTV+ s\'est fermée de façon inattendue', crash);
+  }, 1500);
 
   if (API.account) {
     // Validate the saved account in the background; show the app immediately.

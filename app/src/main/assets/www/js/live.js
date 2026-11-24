@@ -355,6 +355,14 @@
 
   L.close = function () {
     if (!L.open) return;
+    try { closeInner(); } catch (e) {
+      try { Native.log('live close: ' + e.message); Native.stop(); } catch (e2) { }
+      L.open = false; NativeEvents.owner = null; Nav.handler = null;
+      var ly = document.getElementById('layer'); Nav.popRoot(ly); ly.classList.remove('on'); ly.innerHTML = '';
+      document.documentElement.classList.remove('playing');
+    }
+  };
+  function closeInner() {
     L.open = false;
     Native.stop();
     Native.setLandscape(false);
@@ -369,7 +377,7 @@
     layer.classList.remove('on'); layer.innerHTML = '';
     document.documentElement.classList.remove('playing');
     el = null; playing = null;
-  };
+  }
 
   window.Live = L;
 })();

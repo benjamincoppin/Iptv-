@@ -62,6 +62,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        Diag.init(this);
         isTv = detectTv();
 
         root = new FrameLayout(this);
@@ -73,11 +74,8 @@ public class MainActivity extends Activity {
         root.addView(videoBox, new FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-        web = new WebView(this);
-        web.setBackgroundColor(Color.TRANSPARENT);
-        root.addView(web, new FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         setContentView(root);
+        Diag.log("Démarrage IPTV+ " + appVersion() + (isTv ? " (TV)" : " (téléphone)"));
 
         setupVideo();
         setupWeb();
@@ -121,7 +119,15 @@ public class MainActivity extends Activity {
         });
     }
 
+    private String appVersion() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; }
+    }
+
     private void setupWeb() {
+        web = new WebView(this);
+        web.setBackgroundColor(Color.TRANSPARENT);
+        root.addView(web, new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -141,10 +147,23 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Bridge(), "Native");
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, String url) { return !url.startsWith("file:"); }
+
+            // The interface's browser engine crashed (often out of memory): rebuild it instead of closing the app.
+            @Override public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+                Diag.log("Moteur d'affichage arrêté" + (Build.VERSION.SDK_INT >= 26 && detail.didCrash() ? " (plantage)" : " (mémoire)") + " : redémarrage de l'interface");
+                if (view != web) return true;
+                try { player.stop(); } catch (Throwable ignored) { }
+                currentUrl = null;
+                root.removeView(web);
+                try { web.destroy(); } catch (Throwable ignored) { }
+                web = null;
+                ui.post(new Runnable() { @Override public void run() { setupWeb(); } });
+                return true;
+            }
         });
         web.setWebChromeClient(new WebChromeClient() {
             @Override public boolean onConsoleMessage(ConsoleMessage m) {
-                android.util.Log.d("IPTVPlus", m.message() + " @" + m.sourceId() + ":" + m.lineNumber());
+                if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR) Diag.log("JS: " + m.message() + " @" + m.sourceId().replaceAll(".*/", "") + ":" + m.lineNumber());
                 return true;
             }
         });
@@ -159,13 +178,13 @@ public class MainActivity extends Activity {
         ui.post(new Runnable() {
             @Override public void run() {
                 String js = "window.NativeEvents&&NativeEvents.player(" + JSONObject.quote(type) + "," + (data == null ? "null" : data) + ")";
-                web.evaluateJavascript(js, null);
+                if (web != null) web.evaluateJavascript(js, null);
             }
         });
     }
 
     private void js(final String code) {
-        ui.post(new Runnable() { @Override public void run() { web.evaluateJavascript(code, null); } });
+        ui.post(new Runnable() { @Override public void run() { if (web != null) web.evaluateJavascript(code, null); } });
     }
 
     private void hideSystemUi() {
@@ -185,9 +204,21 @@ public class MainActivity extends Activity {
         if (hasFocus) hideSystemUi();
     }
 
+    @Override protected void onStart() {
+        super.onStart();
+        Diag.setAlive(true);
+        player.onForeground();
+    }
+
+    @Override protected void onStop() {
+        Diag.setAlive(false);
+        js("window.App&&App.onAppPause&&App.onAppPause()");
+        player.onBackground();
+        super.onStop();
+    }
+
     @Override protected void onPause() {
         super.onPause();
-        js("window.App&&App.onAppPause&&App.onAppPause()");
         player.pause();
     }
 
@@ -198,15 +229,19 @@ public class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        Diag.setAlive(false);
         player.release();
         pool.shutdownNow();
+        if (web != null) { try { web.destroy(); } catch (Throwable ignored) { } }
         super.onDestroy();
     }
 
     @Override public void onBackPressed() {
-        web.evaluateJavascript("(window.App&&App.back)?App.back():false", new android.webkit.ValueCallback<String>() {
+        if (web == null) return;
+        // Only an explicit "false" from the interface closes the app (a JS error must never quit)
+        web.evaluateJavascript("(function(){try{return (window.App&&App.back)?App.back():true;}catch(e){return true;}})()", new android.webkit.ValueCallback<String>() {
             @Override public void onReceiveValue(String v) {
-                if (!"true".equals(v)) finish();
+                if ("false".equals(v)) finish();
             }
         });
     }
@@ -238,7 +273,7 @@ public class MainActivity extends Activity {
             if (e.getAction() == KeyEvent.ACTION_DOWN) js("window.App&&App.mediaKey&&App.mediaKey(" + JSONObject.quote(name) + ")");
             return true;
         }
-        if (!web.hasFocus()) web.requestFocus();
+        if (web != null && !web.hasFocus()) web.requestFocus();
         return super.dispatchKeyEvent(e);
     }
 
@@ -252,6 +287,31 @@ public class MainActivity extends Activity {
     public class Bridge {
 
         @JavascriptInterface public boolean isTv() { return isTv; }
+
+        @JavascriptInterface public String lastCrash() { return Diag.takeCrash(); }
+
+        @JavascriptInterface public String journal() { return Diag.journal(); }
+
+        @JavascriptInterface public void log(String msg) { Diag.log("JS: " + msg); }
+
+        @JavascriptInterface public void share(final String text) {
+            ui.post(new Runnable() {
+                @Override public void run() {
+                    try {
+                        Intent i = new Intent(Intent.ACTION_SEND);
+                        i.setType("text/plain");
+                        i.putExtra(Intent.EXTRA_SUBJECT, "Rapport IPTV+");
+                        i.putExtra(Intent.EXTRA_TEXT, text);
+                        startActivity(Intent.createChooser(i, "Envoyer le rapport"));
+                    } catch (Throwable t) {
+                        try {
+                            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                            cm.setPrimaryClip(android.content.ClipData.newPlainText("Rapport IPTV+", text));
+                        } catch (Throwable ignored) { }
+                    }
+                }
+            });
+        }
 
         @JavascriptInterface public String version() {
             try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; }

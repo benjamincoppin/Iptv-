@@ -14,6 +14,7 @@
       audioTracks: function () { return '[]'; }, selectAudio: function () {}, setAspect: function (m) { console.log('[native] aspect', m); },
       openExternal: function () { return false; },
       setLandscape: function () {}, exit: function () {},
+      lastCrash: function () { return ''; }, journal: function () { return ''; }, log: function (m) { console.log('[log]', m); }, share: function () {},
       http: null
     };
   }
