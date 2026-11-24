@@ -5,6 +5,9 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -41,6 +44,8 @@ jobs:
           gradle --no-daemon :app:assembleRelease
           mkdir -p out
           cp app/build/outputs/apk/release/*.apk "out/IPTVPlus-$VNAME.apk"
+          cp app/build/outputs/apk/release/*.apk out/IPTVPlus.apk
+          echo "VNAME=$VNAME" >> "$GITHUB_ENV"
           ls -la out
 
       - uses: actions/upload-artifact@v4
@@ -48,3 +53,15 @@ jobs:
           name: IPTVPlus-apk
           path: out/*.apk
           retention-days: 30
+
+      # Publish a release only when the APK is signed with the real key (updates install over the previous version)
+      - name: Publication (Releases)
+        if: env.KEYSTORE_PATH != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VNAME }}
+          name: IPTV+ ${{ env.VNAME }}
+          make_latest: true
+          files: |
+            out/IPTVPlus.apk
+            out/IPTVPlus-${{ env.VNAME }}.apk
