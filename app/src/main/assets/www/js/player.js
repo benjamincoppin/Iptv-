@@ -343,6 +343,31 @@
       });
       Nav.focus(U.$('.opt.sel', bg) || U.$('.opt', bg));
     },
+    prompt: function (title, help, value, cb) {
+      var self = this;
+      self.close();
+      var host = document.getElementById('layer');
+      var standalone = !host.classList.contains('on');
+      if (standalone) host.classList.add('on');
+      self._standalone = standalone;
+      self._prevFocus = Nav.current;
+      self._prevHandler = Nav.handler;
+      Nav.handler = null;
+      var bg = U.html('<div class="modal-bg"><div class="modal nav-group"><h3>' + U.esc(title) + '</h3>' +
+        '<p class="muted" style="margin:0 0 12px;font-size:13px;line-height:1.5">' + U.esc(help) + '</p>' +
+        '<label class="field"><input class="f" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" data-submit="1" value="' + U.esc(value) + '"></label>' +
+        '<div style="display:flex;gap:10px"><button class="f btn primary" data-p="ok">Enregistrer</button><button class="f btn" data-p="no">Annuler</button></div></div></div>');
+      host.appendChild(bg);
+      self._el = bg;
+      Nav.pushRoot(bg);
+      var inp = U.$('input', bg);
+      function ok() { var v = inp.value; self.close(); cb(v); }
+      U.$('[data-p="ok"]', bg).onclick = ok;
+      U.$('[data-p="no"]', bg).onclick = function () { self.close(); };
+      inp.addEventListener('submit-input', ok);
+      inp.addEventListener('keydown', function (e) { if (e.keyCode === 13 && !document.body.classList.contains('kbd')) ok(); });
+      Nav.focus(inp);
+    },
     close: function () {
       if (!this._el) return;
       Nav.popRoot(this._el);

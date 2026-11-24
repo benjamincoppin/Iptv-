@@ -200,8 +200,68 @@
 
   window.API = API;
 
+  // ---------- TMDB (images et résumés des épisodes) ----------
+  var TMDB = { mem: {} };
+  TMDB.key = function () {
+    var k = (Settings.get('tmdbKey') || '').trim();
+    if (!k && window.IPTV_CONFIG) k = String(IPTV_CONFIG.tmdbKey || '').trim();
+    return k;
+  };
+  TMDB.enabled = function () { return !!TMDB.key(); };
+  TMDB.get = function (path, params) {
+    var key = TMDB.key();
+    var q = Object.keys(params || {}).map(function (k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
+    var bearer = key.length > 60; // v4 "read access token" vs v3 api key
+    var url = 'https://api.themoviedb.org/3' + path + '?language=fr-FR' + (q ? '&' + q : '') + (bearer ? '' : '&api_key=' + encodeURIComponent(key));
+    if (TMDB.mem[url]) return TMDB.mem[url];
+    var p = new Promise(function (resolve, reject) {
+      var x = new XMLHttpRequest();
+      x.open('GET', url, true);
+      x.timeout = 15000;
+      if (bearer) x.setRequestHeader('Authorization', 'Bearer ' + key);
+      x.onload = function () {
+        if (x.status >= 200 && x.status < 300) { try { resolve(JSON.parse(x.responseText)); } catch (e) { reject(e); } }
+        else reject(new Error('TMDB ' + x.status));
+      };
+      x.onerror = x.ontimeout = function () { reject(new Error('TMDB injoignable')); };
+      x.send();
+    });
+    TMDB.mem[url] = p;
+    p.catch(function () { delete TMDB.mem[url]; });
+    return p;
+  };
+  TMDB.img = function (path, size) { return path ? 'https://image.tmdb.org/t/p/' + (size || 'w300') + path : ''; };
+  // TMDB id of a series: from the Xtream data, else a search by name (+ year), cached per series
+  TMDB.tvId = function (sid, info, base, name) {
+    var direct = info.tmdb || info.tmdb_id || base.tmdb || base.tmdb_id;
+    if (direct && /^\d+$/.test(String(direct))) return Promise.resolve(String(direct));
+    var cache = U.store.get('tmdbIds', {});
+    if (cache[sid]) return Promise.resolve(cache[sid] === 'none' ? null : cache[sid]);
+    var year = U.year(info.releaseDate || info.release_date || base.releaseDate);
+    var clean = U.noYear(name).replace(/\s*[\(\[][^\)\]]*[\)\]]\s*/g, ' ').replace(/\b(VOSTFR|VF|FR|MULTI|4K|HD|FHD|UHD)\b/gi, '').trim();
+    function search(withYear) {
+      var p = { query: clean };
+      if (withYear && year) p.first_air_date_year = year;
+      return TMDB.get('/search/tv', p).then(function (r) { return r && r.results && r.results[0] ? String(r.results[0].id) : null; });
+    }
+    return search(true).then(function (id) { return id || search(false); }).then(function (id) {
+      cache = U.store.get('tmdbIds', {}); cache[sid] = id || 'none'; U.store.set('tmdbIds', cache);
+      return id;
+    });
+  };
+  // { "<episode number>": {still, name, overview} } for one season
+  TMDB.season = function (tvId, n) {
+    return TMDB.get('/tv/' + tvId + '/season/' + n).then(function (r) {
+      var out = {};
+      ((r && r.episodes) || []).forEach(function (e) { out[String(e.episode_number)] = { still: TMDB.img(e.still_path), name: e.name, overview: e.overview }; });
+      out._poster = TMDB.img(r && r.poster_path, 'w342');
+      return out;
+    });
+  };
+  window.TMDB = TMDB;
+
   // ---------- settings ----------
-  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto' };
+  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', tmdbKey: '' };
   window.Settings = {
     all: function () { var s = U.store.get('settings', {}); var o = {}; for (var k in defaults) o[k] = (k in s) ? s[k] : defaults[k]; return o; },
     get: function (k) { return this.all()[k]; },

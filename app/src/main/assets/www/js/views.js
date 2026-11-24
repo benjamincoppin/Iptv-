@@ -284,9 +284,16 @@
         var n = se.season_number != null ? se.season_number : se.season;
         seasonImg[String(n)] = [se.cover_big, se.cover, se.cover_tmdb, se.overview_image];
       });
+      var tmdbEp = {};   // "season:episode" -> {still, name, overview}
+      var generic = {}; [cover, backdrop].concat(info.backdrop_path || []).forEach(function (u) { if (U.imgUrl(u)) generic[U.imgUrl(u)] = 1; });
+      function ownImage(ei) {
+        var u = U.imgUrl(ei.movie_image) || U.imgUrl(ei.cover_big);
+        return u && !generic[u] ? u : ''; // the series poster repeated on every episode is not a real episode picture
+      }
+      function tmdbOf(item) { return tmdbEp[item.s + ':' + item.e.episode_num] || null; }
       function epImages(item) {
-        var ei = item.e.info || {};
-        return [ei.movie_image, ei.cover_big, ei.cover, ei.still_path, item.e.stream_icon, item.e.cover, seasonImg[String(item.s)], info.backdrop_path, backdrop, cover];
+        var ei = item.e.info || {}, t = tmdbOf(item);
+        return [ownImage(ei), t && t.still, ei.still_path, item.e.stream_icon, seasonImg[String(item.s)], tmdbEp['_poster' + item.s], info.backdrop_path, backdrop, cover];
       }
       var flat = [];
       seasons.forEach(function (s) { (eps[s] || []).slice().sort(function (a, b) { return +a.episode_num - +b.episode_num; }).forEach(function (e) { flat.push({ s: s, e: e }); }); });
@@ -351,8 +358,9 @@
           var e = it.e, ei = e.info || {}, hh = Hist.get('episode', e.id);
           var pct = hh && hh.dur ? Math.min(100, Math.round(hh.pos / hh.dur * 100)) : 0;
           var dur = ei.duration_secs ? U.minutesLabel(ei.duration_secs / 60) : U.hmsLabel(ei.duration);
+          var tm = tmdbOf(it), plot = ei.plot || (tm && tm.overview) || '';
           return '<button class="f ep" data-e="' + e.id + '" data-key="e' + e.id + '"><div class="eimg">' + U.imgChain(epImages(it)) + (pct ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') + '</div>' +
-            '<div style="min-width:0"><div class="et">' + U.esc(e.episode_num + '. ' + epTitle(e)) + '</div><div class="ed">' + U.esc([dur, pct >= 94 ? 'Vu' : pct ? 'En cours' : ''].filter(Boolean).join(' · ')) + (ei.plot ? ' — ' + U.esc(ei.plot) : '') + '</div></div></button>';
+            '<div style="min-width:0"><div class="et">' + U.esc(e.episode_num + '. ' + epTitle(e)) + '</div><div class="ed">' + U.esc([dur, pct >= 94 ? 'Vu' : pct ? 'En cours' : ''].filter(Boolean).join(' · ')) + (plot ? ' — ' + U.esc(plot) : '') + '</div></div></button>';
         }).join('') : '<div class="empty">Aucun épisode.</div>';
         U.$$('.ep', box).forEach(function (b) {
           b.addEventListener('click', function () {
@@ -360,6 +368,25 @@
             if (it) playItem(it);
           });
         });
+        loadTmdb(s);
+      }
+
+      // Fetch episode pictures from TMDB for this season, then redraw the list keeping the focus
+      var tmdbIdP = null, tmdbDone = {};
+      function loadTmdb(s) {
+        if (!TMDB.enabled() || tmdbDone[s]) return;
+        tmdbDone[s] = true;
+        if (!tmdbIdP) tmdbIdP = TMDB.tvId(sid, info, base, name);
+        tmdbIdP.then(function (id) { return id ? TMDB.season(id, s) : null; }).then(function (eps2) {
+          if (!eps2 || !page.isConnected || String(season) !== String(s)) return;
+          Object.keys(eps2).forEach(function (n) { if (n === '_poster') tmdbEp['_poster' + s] = eps2[n]; else tmdbEp[s + ':' + n] = eps2[n]; });
+          var focusKey = Nav.current && page.contains(Nav.current) ? Nav.current.dataset.key : null;
+          var scroll = document.getElementById('page').scrollTop;
+          showSeason(s);
+          document.getElementById('page').scrollTop = scroll;
+          var f = focusKey && U.$('[data-key="' + focusKey + '"]', page);
+          if (f) Nav.focus(f, { noScroll: true });
+        }).catch(function (e) { console.warn(e); });
       }
       U.$$('.chip', page).forEach(function (b) { b.addEventListener('click', function () { showSeason(b.dataset.s); }); });
       U.$$('[data-a]', page).forEach(function (b) {
@@ -445,6 +472,7 @@
       row('player', 'Lecteur vidéo', 'Intégré, ou externe (VLC, MX Player…)', s.player === 'external' ? 'Externe' : 'Intégré') +
       row('aspectLive', 'Format d\'image · TV en direct', 'Original, 16:9, 4:3, étirer ou zoom', Aspect.labels[Aspect.get('live')]) +
       row('aspectVod', 'Format d\'image · Films et séries', 'Original, 16:9, 4:3, étirer ou zoom', Aspect.labels[Aspect.get('vod')]) +
+      row('tmdb', 'Images des épisodes (TMDB)', 'Clé API TMDB pour les images et résumés manquants', TMDB.enabled() ? 'Activé' : 'Désactivé') +
       row('autoNext', 'Épisode suivant automatique', 'Enchaîne les épisodes d\'une série', s.autoNext ? 'Oui' : 'Non') +
       row('reload', 'Recharger les listes', 'Récupère les nouvelles chaînes, films et séries', '') +
       row('clearHist', 'Effacer l\'historique', 'Vide « Reprendre la lecture » et les chaînes récentes', '') +
@@ -460,6 +488,12 @@
         else if (k === 'player') Modal.choose('Lecteur vidéo', [{ label: 'Intégré', value: 'internal' }, { label: 'Externe', value: 'external' }].map(function (o) { o.selected = Settings.get('player') === o.value; return o; }), function (v) { Settings.set('player', v); App.refresh(); });
         else if (k === 'aspectLive') Aspect.choose('live', function () { App.refresh(); });
         else if (k === 'aspectVod') Aspect.choose('vod', function () { App.refresh(); });
+        else if (k === 'tmdb') Modal.prompt('Clé API TMDB', 'Colle ta clé API (v3) ou ton jeton de lecture (v4) TMDB. Laisse vide pour utiliser la clé intégrée à l\'appli.', Settings.get('tmdbKey') || '', function (val) {
+          Settings.set('tmdbKey', val.trim()); U.store.del('tmdbIds'); TMDB.mem = {};
+          if (!TMDB.enabled()) { U.toast('TMDB désactivé'); App.refresh(); return; }
+          TMDB.get('/configuration').then(function () { U.toast('Clé TMDB valide'); }, function () { U.toast('Clé TMDB refusée, vérifie-la'); });
+          App.refresh();
+        });
         else if (k === 'autoNext') { Settings.set('autoNext', !Settings.get('autoNext')); App.refresh(); }
         else if (k === 'reload') { API.cache = {}; API.epgCache = {}; API.refreshInfo().catch(function () { }); U.toast('Listes rechargées'); }
         else if (k === 'clearHist') { Hist.clear(); U.toast('Historique effacé'); }
