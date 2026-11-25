@@ -191,6 +191,42 @@
     }
   }
 
+  // ---------- replay (catch-up) ----------
+  // Full EPG of a channel, past programmes included (has_archive = recorded on the server)
+  API.fullEpg = function (streamId) {
+    var k = 'fullepg_' + streamId;
+    if (API.cache[k]) return API.cache[k];
+    var p = getJson(base() + '&action=get_simple_data_table&stream_id=' + streamId).then(function (r) {
+      var l = (r && r.epg_listings) || [];
+      return l.map(function (e) {
+        var st = e.start_timestamp ? e.start_timestamp * 1000 : Date.parse(String(e.start).replace(' ', 'T'));
+        var en = e.stop_timestamp ? e.stop_timestamp * 1000 : Date.parse(String(e.end || e.stop).replace(' ', 'T'));
+        return { title: U.b64(e.title), desc: U.b64(e.description), start: st, end: en, startStr: e.start || '', archive: String(e.has_archive) === '1' };
+      }).sort(function (a, b) { return a.start - b.start; });
+    });
+    API.cache[k] = p;
+    p.catch(function () { delete API.cache[k]; });
+    return p;
+  };
+  API.hasArchive = function (s) { return s && String(s.tv_archive) === '1' && +s.tv_archive_duration > 0; };
+  // Server-local "YYYY-MM-DD:HH-MM" for a timestamp (Xtream timeshift URLs use the server's time zone)
+  API.serverTime = function (ms, startStr) {
+    if (startStr && /^\d{4}-\d\d-\d\d \d\d:\d\d/.test(startStr)) return startStr.slice(0, 10) + ':' + startStr.slice(11, 13) + '-' + startStr.slice(14, 16);
+    var tz = API.info && API.info.server_info && API.info.server_info.timezone;
+    var d = new Date(ms), parts = {};
+    try {
+      new Intl.DateTimeFormat('en-GB', { timeZone: tz || undefined, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })
+        .formatToParts(d).forEach(function (p) { parts[p.type] = p.value; });
+      return parts.year + '-' + parts.month + '-' + parts.day + ':' + (parts.hour === '24' ? '00' : parts.hour) + '-' + parts.minute;
+    } catch (e) {
+      return d.getFullYear() + '-' + U.pad(d.getMonth() + 1) + '-' + U.pad(d.getDate()) + ':' + U.pad(d.getHours()) + '-' + U.pad(d.getMinutes());
+    }
+  };
+  API.replayUrl = function (streamId, prog) {
+    var a = API.account, mins = Math.max(1, Math.round((prog.end - prog.start) / 60000));
+    return a.server + '/timeshift/' + encodeURIComponent(a.user) + '/' + encodeURIComponent(a.pass) + '/' + mins + '/' + API.serverTime(prog.start, prog.startStr) + '/' + streamId + '.ts';
+  };
+
   // ---------- stream URLs ----------
   API.liveFormat = function () {
     var s = Settings.get('liveFormat');
@@ -231,7 +267,8 @@
     var key = TMDB.key();
     var q = Object.keys(params || {}).map(function (k) { return k + '=' + encodeURIComponent(params[k]); }).join('&');
     var bearer = key.length > 60; // v4 "read access token" vs v3 api key
-    var url = 'https://api.themoviedb.org/3' + path + '?language=fr-FR' + (q ? '&' + q : '') + (bearer ? '' : '&api_key=' + encodeURIComponent(key));
+    var lang = params && params.language ? '' : 'language=fr-FR';
+    var url = 'https://api.themoviedb.org/3' + path + '?' + [lang, q].filter(Boolean).join('&') + (bearer ? '' : '&api_key=' + encodeURIComponent(key));
     if (TMDB.mem[url]) return TMDB.mem[url];
     var p = new Promise(function (resolve, reject) {
       var x = new XMLHttpRequest();
@@ -277,10 +314,41 @@
       return out;
     });
   };
+  // TMDB id of a movie (from Xtream vod_info when available, else search)
+  TMDB.movieId = function (vodId, info, name) {
+    var direct = info && (info.tmdb_id || info.tmdb);
+    if (direct && /^\d+$/.test(String(direct))) return Promise.resolve(String(direct));
+    var cache = AS.get('tmdbIds', {}), ck = 'm' + vodId;
+    if (cache[ck]) return Promise.resolve(cache[ck] === 'none' ? null : cache[ck]);
+    var year = U.year((info && (info.releasedate || info.release_date)) || name);
+    var clean = U.noYear(U.cleanName(name)).replace(/\b(VOSTFR|VF|FR|MULTI|4K|HD|FHD|UHD)\b/gi, '').trim();
+    var p = { query: clean }; if (year) p.year = year;
+    return TMDB.get('/search/movie', p).then(function (r) {
+      var id = r && r.results && r.results[0] ? String(r.results[0].id) : null;
+      cache = AS.get('tmdbIds', {}); cache[ck] = id || 'none'; AS.set('tmdbIds', cache);
+      return id;
+    });
+  };
+  TMDB.recommendations = function (kind, id) { // kind: movie | tv
+    return TMDB.get('/' + kind + '/' + id + '/recommendations').then(function (r) {
+      return ((r && r.results) || []).map(function (x) { return { title: x.title || x.name, original: x.original_title || x.original_name, year: U.year(x.release_date || x.first_air_date) }; });
+    });
+  };
+  // YouTube key of the trailer (French first, then any language)
+  TMDB.trailer = function (kind, id) {
+    function pick(r) {
+      var v = ((r && r.results) || []).filter(function (x) { return x.site === 'YouTube'; });
+      var t = v.filter(function (x) { return x.type === 'Trailer'; })[0] || v.filter(function (x) { return x.type === 'Teaser'; })[0] || v[0];
+      return t ? t.key : null;
+    }
+    return TMDB.get('/' + kind + '/' + id + '/videos').then(function (r) {
+      return pick(r) || TMDB.get('/' + kind + '/' + id + '/videos', { language: 'en-US' }).then(pick);
+    }).catch(function () { return null; });
+  };
   window.TMDB = TMDB;
 
   // ---------- settings ----------
-  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', syncUrl: '', subSize: 'normal', subColor: 'white', subAuto: true, introSkip: 85, autoUpdate: true };
+  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', syncUrl: '', subSize: 'normal', subColor: 'white', subAuto: true, introSkip: 85, autoUpdate: true, askProfile: true };
   window.Settings = {
     all: function () { var s = U.store.get('settings', {}); var o = {}; for (var k in defaults) o[k] = (k in s) ? s[k] : defaults[k]; return o; },
     get: function (k) { return this.all()[k]; },

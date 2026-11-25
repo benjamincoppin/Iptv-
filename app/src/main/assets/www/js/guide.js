@@ -12,9 +12,9 @@
     page.innerHTML = '<div class="spinner"></div>';
     if (window.matchMedia('(max-width:720px)').matches) PX = 4; else PX = 5;
     return Promise.all([API.categories('live'), API.liveStreams()]).then(function (r) {
-      all = r[1]; byCat = {};
+      all = Cats.filterItems('live', r[1]); byCat = {};
       all.forEach(function (s) { (byCat[s.category_id] = byCat[s.category_id] || []).push(s); });
-      cats = r[0].filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; });
+      cats = Cats.apply('live', r[0]).filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; });
       if (Fav.list('live').length) cats.unshift({ id: '__fav', name: 'Favoris' });
       var saved = AS.get('guideCat', null) || AS.get('lastLiveCat', null);
       catId = cats.some(function (c) { return String(c.id) === String(saved); }) ? saved : (cats[0] && cats[0].id);
@@ -37,13 +37,15 @@
           '<div class="pi"><div class="c"></div><h2>Guide TV</h2><div class="t">Sélectionne un programme</div><div class="d"></div></div>' +
           '<div class="clock">' + U.hm(now) + '</div></div>' +
         '<div class="chips nav-group" style="padding-left:var(--pad);padding-right:var(--pad);margin:0">' +
+          (all.some(API.hasArchive) ? '<button class="f chip" data-replay="1">↺ Replay</button>' : '') +
           cats.map(function (c) { return '<button class="f chip" data-c="' + U.esc(c.id) + '">' + U.esc(c.name) + '</button>'; }).join('') + '</div>' +
         '<div class="body"><div class="scroller" data-pad-left="' + (window.matchMedia('(max-width:720px)').matches ? 130 : 200) + '" data-pad-top="34">' +
           '<div class="times"><div class="corner"></div>' + times + '</div>' +
           '<div class="rows" style="position:relative;width:' + (width + 200) + 'px"></div>' +
         '</div></div>' +
       '</div>';
-    U.$$('.gd .chip', root).forEach(function (b) { b.addEventListener('click', function () { selectCat(b.dataset.c, true); }); });
+    U.$$('.gd .chip[data-c]', root).forEach(function (b) { b.addEventListener('click', function () { selectCat(b.dataset.c, true); }); });
+    var rp = U.$('.gd .chip[data-replay]', root); if (rp) rp.addEventListener('click', function () { App.go('replay'); });
     selectCat(catId, false);
     var sc = U.$('.scroller', root);
     sc.scrollLeft = 30 * PX - 10;
@@ -57,7 +59,7 @@
   function selectCat(id, focus) {
     catId = id;
     AS.set('guideCat', id);
-    U.$$('.gd .chip', root).forEach(function (b) { b.classList.toggle('active', String(b.dataset.c) === String(id)); });
+    U.$$('.gd .chip[data-c]', root).forEach(function (b) { b.classList.toggle('active', String(b.dataset.c) === String(id)); });
     if (id === '__fav') {
       rows = Fav.list('live').map(function (f) { return all.find(function (s) { return String(s.stream_id) === String(f.id); }); }).filter(Boolean);
     } else rows = byCat[id] || [];
@@ -121,14 +123,16 @@
       var progs = list.filter(function (p) { return p.end > winStart && p.start < wEnd; });
       var box = U.$('.progs', r);
       var hadFocus = Nav.current && box.contains(Nav.current);
+      var chan = all.find(function (x) { return String(x.stream_id) === String(id); }) || {};
       if (!progs.length) {
         box.innerHTML = '<button class="f pg none" data-id="' + id + '" style="left:0;width:' + (HOURS * 60 * PX - 4) + 'px"><div class="pt">Aucune information de programme</div></button>';
       } else {
         box.innerHTML = progs.map(function (p, i) {
           var st = Math.max(p.start, winStart), en = Math.min(p.end, wEnd);
           var left = (st - winStart) / 60000 * PX, w = Math.max(8, (en - st) / 60000 * PX - 4);
-          var isNow = p.start <= now && p.end > now;
-          return '<button class="f pg' + (isNow ? ' now' : '') + '" data-id="' + id + '" data-p="' + i + '" style="left:' + left + 'px;width:' + w + 'px">' +
+          var isNow = p.start <= now && p.end > now, isPast = p.end <= now;
+          var canReplay = isPast && API.hasArchive(chan) && p.start >= now - (+chan.tv_archive_duration) * 86400000;
+          return '<button class="f pg' + (isNow ? ' now' : '') + (isPast ? ' past' : '') + (canReplay ? ' replay' : '') + '" data-id="' + id + '" data-p="' + i + '" style="left:' + left + 'px;width:' + w + 'px">' +
             '<div class="pt">' + U.esc(p.title) + '</div><div class="ph">' + U.hm(p.start) + ' – ' + U.hm(p.end) + '</div></button>';
         }).join('');
         box._progs = progs;
@@ -165,6 +169,16 @@
 
   function openProg(b) {
     var p = progOf(b);
+    if (p && b.classList.contains('replay')) {
+      var ch = all.find(function (x) { return String(x.stream_id) === String(b.dataset.id); });
+      // short EPG has no server-local start string: fetch the full EPG to get it
+      API.fullEpg(ch.stream_id).then(function (full) {
+        var m = full.filter(function (x) { return Math.abs(x.start - p.start) < 60000; })[0] || p;
+        Views.playReplay(ch, m);
+      }).catch(function () { Views.playReplay(ch, p); });
+      return;
+    }
+    if (p && p.end <= Date.now()) { U.toast('Programme terminé (pas de replay sur cette chaîne). Lancement du direct…'); }
     if (p && p.start > Date.now()) {
       U.toast('« ' + p.title + ' » commence à ' + U.hm(p.start) + '. Lancement de la chaîne…');
     }

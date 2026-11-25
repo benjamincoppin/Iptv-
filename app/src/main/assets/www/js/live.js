@@ -34,10 +34,10 @@
 
     Promise.all([API.categories('live'), API.liveStreams()]).then(function (r) {
       if (!L.open) return;
-      all = r[1]; byCat = {};
+      all = Cats.filterItems('live', r[1]); byCat = {};
       all.forEach(function (s) { (byCat[s.category_id] = byCat[s.category_id] || []).push(s); });
       cats = [{ id: '__fav', name: 'Favoris' }, { id: '__recent', name: 'Récents' }, { id: '__all', name: 'Toutes les chaînes' }]
-        .concat(r[0].filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; }));
+        .concat(Cats.apply('live', r[0]).filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; }));
       var startId = o.id || Hist.lastLive();
       var start = startId && all.find(function (s) { return String(s.stream_id) === String(startId); });
       if (!start) start = all[0];
@@ -271,10 +271,11 @@
     var fav = Fav.has('live', s.stream_id);
     Modal.choose(U.cleanName(s.name), [
       { label: fav ? 'Retirer des favoris' : 'Ajouter aux favoris', value: 'fav' },
-      { label: 'Regarder', value: 'play' },
+      { label: 'Regarder', value: 'play' }
+    ].concat(API.hasArchive(s) ? [{ label: 'Replay (' + s.tv_archive_duration + ' derniers jours)', value: 'replay' }] : []).concat([
       { label: 'Format d\'image : ' + Aspect.labels[Aspect.get('live')], value: 'aspect' },
       { label: 'Ouvrir dans un lecteur externe', value: 'ext' }
-    ], function (v) {
+    ]), function (v) {
       if (v === 'fav') {
         var added = Fav.toggle('live', chanObj(s));
         U.toast(added ? 'Ajoutée aux favoris' : 'Retirée des favoris');
@@ -283,6 +284,7 @@
         else if (b) { var star = b.querySelector('span[style*="accent"]'); if (added && !star) b.querySelector('.dot').insertAdjacentHTML('beforebegin', '<span style="color:var(--accent);font-size:12px">★</span>'); if (!added && star) star.remove(); }
         updateInfo();
       } else if (v === 'play') play(s);
+      else if (v === 'replay') { L.close(); App.go('replay', { id: s.stream_id }); }
       else if (v === 'aspect') setTimeout(function () { Aspect.choose('live', updateAspectBtn); }, 0);
       else if (v === 'ext') { if (!Native.openExternal(API.liveUrl(s.stream_id), s.name)) U.toast('Aucun lecteur externe installé'); }
     });

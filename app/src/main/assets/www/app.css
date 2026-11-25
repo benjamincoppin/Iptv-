@@ -329,3 +329,51 @@ body.kbd .modal .opt.f.focused{background:var(--text);color:#111;box-shadow:none
   .lv .cats{display:none}
   .lv .infobar{left:340px}
 }
+
+/* ---------- profiles ---------- */
+.avatar{display:inline-flex;align-items:center;justify-content:center;border-radius:50%;color:#fff;font-family:SG,IN,sans-serif;font-weight:700;flex:none;line-height:1}
+.avatar.add{background:var(--card2);color:var(--soft);font-size:44px;font-weight:500}
+.prof-btn{padding:0}
+body.kbd .prof-btn.f.focused{box-shadow:0 0 0 3px var(--text)}
+.who{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px var(--pad) 40px;margin-top:calc(-1 * var(--nav) + 20px)}
+.who h1{font-size:34px;margin-bottom:30px}
+.who-grid{display:flex;flex-wrap:wrap;justify-content:center;gap:26px;max-width:860px}
+.who-p{display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px;border-radius:14px;width:130px;text-align:center}
+.who-p .avatar{transition:transform .15s}
+.who-n{font-size:15px;color:var(--soft);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.who-e{font-size:11px;color:var(--muted)}
+.who-p.cur .who-n{color:var(--accent);font-weight:600}
+body.kbd .who-p.f.focused{box-shadow:none}
+body.kbd .who-p.f.focused .avatar{transform:scale(1.08);box-shadow:0 0 0 4px var(--text)}
+body.kbd .who-p.f.focused .who-n{color:var(--text)}
+.who-actions{margin-top:30px}
+
+/* ---------- settings sections / categories ---------- */
+.settings .sh{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin:22px 0 10px;font-family:IN;font-weight:600}
+.catrow{display:flex;gap:6px;margin-bottom:6px}
+.catrow .catname{flex:1;display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:10px;background:var(--card);font-size:14px;min-width:0}
+.catrow .eye{font-size:11px;font-weight:700;color:var(--accent);width:62px;flex:none}
+.catrow.off .catname{color:var(--muted)}
+.catrow.off .eye{color:var(--muted)}
+.catrow .catmv{width:44px;border-radius:10px;background:var(--card);display:flex;align-items:center;justify-content:center;color:var(--soft)}
+body.kbd .catrow .f.focused{box-shadow:0 0 0 3px var(--text);background:var(--card2)}
+
+/* ---------- replay ---------- */
+.rtime{width:64px;flex:none;font-family:SG;font-weight:700;font-size:18px;display:flex;flex-direction:column;gap:2px}
+.rtime small{font-family:IN;font-weight:500;font-size:11px;color:var(--muted)}
+.gd .pg.past{opacity:.6}
+.gd .pg.replay{opacity:1}
+.gd .pg.replay .pt::before{content:"↺ ";color:var(--accent)}
+
+/* ---------- catalog toolbar ---------- */
+.tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.tool-btn{display:inline-flex;align-items:center;gap:7px;padding:7px 14px;border-radius:18px;background:var(--card);font-size:13px;color:var(--soft)}
+.tool-btn.on{color:var(--accent)}
+body.kbd .tool-btn.f.focused{background:var(--text);color:#111;box-shadow:none}
+.poster .seen{position:absolute;left:6px;top:6px;background:rgba(0,0,0,.75);font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;color:var(--soft)}
+
+/* ---------- player: skip buttons ---------- */
+.skipbtn{position:absolute;right:var(--pad);bottom:150px;z-index:3;padding:12px 20px;border-radius:8px;background:rgba(242,240,237,.95);color:#111;font-weight:700;font-size:15px;display:flex;align-items:center;gap:8px}
+.skipbtn svg{width:16px;height:16px;fill:#111;stroke:#111}
+body.kbd .skipbtn.f.focused{box-shadow:0 0 0 3px var(--accent);transform:scale(1.05)}
+.pl.idle .skipbtn{opacity:1}

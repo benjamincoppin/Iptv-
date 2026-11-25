@@ -40,6 +40,7 @@
   window.Aspect = Aspect;
 
   var P = { open: false };
+  var skipState = {};
   var el, opts, poll, idleTimer, saveTimer, seekTarget = null, seekTimer, state = { pos: 0, dur: 0, playing: false, buffering: true }, ended = false, nextTimer;
 
   function readState() {
@@ -49,7 +50,8 @@
 
   P.start = function (o) {
     // o: {kind, id, url, title, sub, startMs, hist, ext, next:function()->o|null, onClose}
-    opts = o; ended = false; seekTarget = null;
+    opts = o; ended = false; seekTarget = null; skipState = { intro: false, credits: false, subsDone: false };
+    var oldSkip = document.querySelector('#layer .skipbtn'); if (oldSkip) oldSkip.remove();
     if (Settings.get('player') === 'external') {
       if (Native.openExternal(o.url, o.title)) { saveHist(o.startMs || 0, 0); return; }
       U.toast('Aucun lecteur externe trouvé, lecture dans IPTV+');
@@ -96,6 +98,7 @@
           '<button class="f cb big" data-a="toggle" aria-label="Lecture / pause">' + I.pause + '</button>' +
           '<button class="f cb" data-a="ff" aria-label="Avancer de 30 secondes">' + I.ff + '</button>' +
           '<button class="f cb txt" data-a="audio">Audio</button>' +
+          '<button class="f cb txt" data-a="subs">Sous-titres</button>' +
           '<button class="f cb txt" data-a="aspect">Image</button>' +
           (o.next ? '<button class="f cb txt" data-a="next">' + I.next + ' Suivant</button>' : '') +
           '<button class="f cb txt" data-a="ext">Lecteur externe</button>' +
@@ -114,6 +117,7 @@
     else if (a === 'ext') { Native.pause(); if (!Native.openExternal(opts.url, opts.title)) U.toast('Aucun lecteur externe installé (ex. VLC)'); }
     else if (a === 'audio') audioMenu();
     else if (a === 'aspect') Aspect.choose('vod');
+    else if (a === 'subs') subsMenu();
     else if (a === 'track' && e && e.clientX) {
       var r = e.currentTarget.getBoundingClientRect();
       if (state.dur > 0) { seekTarget = Math.round((e.clientX - r.left) / r.width * state.dur); commitSeek(); }
@@ -147,6 +151,68 @@
   function tick() {
     readState();
     updateUi();
+    skipButtons();
+    autoSubs();
+  }
+
+  // ---------- "Passer l'intro" / "Épisode suivant" pendant le générique ----------
+  function skipBtn() { return document.querySelector('#layer .skipbtn'); }
+  function showSkip(kind, label, onClick) {
+    var b = skipBtn();
+    if (b && b.dataset.kind === kind) return;
+    if (b) b.remove();
+    b = U.html('<button class="f skipbtn" data-kind="' + kind + '">' + (kind === 'next' ? I.next : I.ff) + ' ' + U.esc(label) + '</button>');
+    b.addEventListener('click', function () { b.remove(); onClick(); });
+    document.getElementById('layer').appendChild(b);
+    Nav.focus(b, { noScroll: true });
+  }
+  function hideSkip(kind) {
+    var b = skipBtn();
+    if (b && (!kind || b.dataset.kind === kind)) {
+      var had = Nav.current === b;
+      b.remove();
+      if (had && el) Nav.focus(U.$('[data-a="toggle"]', el), { noScroll: true });
+    }
+  }
+  function skipButtons() {
+    if (!opts || opts.kind !== 'episode' || !state.prepared || !state.dur || U.$('.pl-msg', el) || U.$('.next-up', el) || Modal.isOpen()) { hideSkip(); return; }
+    var pos = state.pos, dur = state.dur, intro = +Settings.get('introSkip') || 0;
+    // Intro: first minutes of the episode
+    if (intro && !skipState.intro && pos > 3000 && pos < Math.min(300000, dur * 0.3)) {
+      showSkip('intro', 'Passer l\'intro', function () { skipState.intro = true; seekTarget = null; Native.seekTo(Math.min(dur - 5000, pos + intro * 1000)); state.pos += intro * 1000; showControls(); });
+      return;
+    }
+    hideSkip('intro');
+    // End credits: last 2 minutes (or last 4 %) when there is a next episode
+    var creditsAt = dur - Math.max(60000, Math.min(150000, dur * 0.04));
+    if (opts.next && !skipState.credits && pos >= creditsAt && pos < dur - 3000) {
+      showSkip('next', 'Épisode suivant', function () { skipState.credits = true; playNext(); });
+      return;
+    }
+    hideSkip('next');
+  }
+
+  // ---------- sous-titres ----------
+  function isFrench(name) { return /(\bfr\b|fre\b|fra\b|fran[cç]ais|french|\bvf\b|vff|vfq)/i.test(String(name || '')); }
+  function autoSubs() {
+    if (skipState.subsDone || !state.prepared || !Settings.get('subAuto') || opts.kind === 'replay') return;
+    var subs = [], audio = [];
+    try { subs = JSON.parse(Native.subTracks ? Native.subTracks() : '[]'); audio = JSON.parse(Native.audioTracks()); } catch (e) { }
+    if (!audio.length && state.pos < 4000) return; // tracks not known yet
+    skipState.subsDone = true;
+    var curAudio = audio.filter(function (t) { return t.selected; })[0] || audio[0];
+    if (!curAudio || isFrench(curAudio.lang)) return;           // already French audio
+    if (subs.some(function (t) { return t.selected && t.index >= 0; })) return; // subtitles already on
+    var fr = subs.filter(function (t) { return t.index >= 0 && isFrench(t.lang) && !/forc/i.test(t.lang); })[0] || subs.filter(function (t) { return t.index >= 0 && isFrench(t.lang); })[0];
+    if (fr) { Native.selectSub(fr.index); U.toast('Sous-titres français activés'); }
+  }
+  function subsMenu() {
+    var subs = [];
+    try { subs = JSON.parse(Native.subTracks ? Native.subTracks() : '[]'); } catch (e) { }
+    if (subs.filter(function (t) { return t.index >= 0; }).length === 0) { U.toast('Aucun sous-titre dans cette vidéo'); return; }
+    Modal.choose('Sous-titres', subs.map(function (t, i) {
+      return { label: t.index < 0 ? 'Désactivés' : (t.lang || 'Piste ' + i), value: t.index, selected: t.selected };
+    }), function (v) { Native.selectSub(v); skipState.subsDone = true; U.toast(v < 0 ? 'Sous-titres désactivés' : 'Sous-titres activés'); });
   }
 
   function updateUi() {
@@ -174,6 +240,11 @@
 
   function onKey(e, act) {
     if (U.$('.modal-bg', document.getElementById('layer'))) return false; // let modal navigate
+    if (Nav.current && Nav.current.classList.contains('skipbtn')) {
+      if (act === 'ok') return false;
+      if (act === 'up' || act === 'left') { showControls(); Nav.focus(U.$('[data-a="toggle"]', el), { noScroll: true }); return true; }
+      return true;
+    }
     var idle = el.classList.contains('idle');
     var onTrack = Nav.current && Nav.current.dataset.a === 'track';
     if (act === 'left' || act === 'right') {
@@ -301,6 +372,7 @@
   };
   function closeInner() {
     readState();
+    var sb = document.querySelector('#layer .skipbtn'); if (sb) sb.remove();
     if (window.Sync) setTimeout(Sync.soon, 0);
     if (!ended && state.pos > 0) saveHist(state.pos, state.dur);
     clearInterval(poll); clearInterval(saveTimer); clearInterval(nextTimer); clearTimeout(idleTimer);

@@ -14,7 +14,7 @@
       audioTracks: function () { return '[]'; }, selectAudio: function () {}, setAspect: function (m) { console.log('[native] aspect', m); },
       openExternal: function () { return false; },
       setLandscape: function () {}, exit: function () {},
-      lastCrash: function () { return ''; }, journal: function () { return ''; }, log: function (m) { console.log('[log]', m); }, share: function () {},
+      lastCrash: function () { return ''; }, openUrl: function (u) { window.open(u, '_blank'); return true; }, subTracks: function () { return '[]'; }, selectSub: function () {}, setSubtitleStyle: function () {}, journal: function () { return ''; }, log: function (m) { console.log('[log]', m); }, share: function () {},
       http: null
     };
   }

@@ -2,7 +2,8 @@
 (function () {
   'use strict';
 
-  var TOP = ['home', 'guide', 'movies', 'series', 'favorites', 'search', 'settings'];
+  var TOP = ['home', 'guide', 'replay', 'movies', 'series', 'favorites', 'search', 'settings', 'profiles'];
+  var profileAsked = false;
   var page = document.getElementById('page');
   var stack = [];       // [{route, params, scroll, key}]
   var exitArmed = 0;
@@ -73,8 +74,11 @@
     if (Player.open) Player.close();
     if (route !== 'login' && !API.account) route = 'login';
     var entry = { route: route, params: params || {} };
-    if (TOP.indexOf(route) >= 0 || route === 'login') {
+    var isTop = (TOP.indexOf(route) >= 0 && !(route === 'replay' && entry.params.id) && !(route === 'profiles' && entry.params.manage)) || (route === 'login' && !entry.params.add);
+    if (isTop) {
       stack = [entry];
+    } else if (opts.replace && stack.length) {
+      stack[stack.length - 1] = entry;
     } else {
       saveCurrent();
       stack.push(entry);
@@ -173,8 +177,33 @@
   };
 
   App.start = function () {
-    if (window.Sync) setTimeout(Sync.now, 500);
+    if (!API.account) return App.go('login');
+    profileAsked = false;
+    App.updateAvatar();
+    if (window.Views && Views.applySubStyle) Views.applySubStyle();
+    if (window.Sync) setTimeout(function () { Sync.now().then(function () { App.updateAvatar(); }); }, 500);
+    setTimeout(function () { if (window.Update) Update.check(false); }, 8000);
+    if (Profiles.list().length > 1 && Settings.get('askProfile') !== false) { profileAsked = true; return App.go('profiles'); }
     return App.go(Settings.get('startLive') ? 'live' : 'home');
+  };
+
+  // After choosing a profile on "Qui regarde ?"
+  App.afterProfileChange = function () {
+    App.updateAvatar();
+    U.toast('Profil : ' + Profiles.current().name);
+    App.go(Settings.get('startLive') && profileAsked ? 'live' : 'home');
+    profileAsked = false;
+  };
+
+  App.updateProgress = function (state, pct, msg) { if (window.Update) Update.progress(state, pct, msg); };
+
+  App.updateAvatar = function () {
+    var b = document.querySelector('.prof-btn');
+    if (!b) return;
+    if (!API.account) { b.innerHTML = ''; return; }
+    var p = Profiles.current();
+    b.innerHTML = Views.avatar(p, 30);
+    b.setAttribute('aria-label', 'Profil : ' + p.name + ' (changer)');
   };
 
   // Tabs (top bar on TV / tablet, bottom bar on phones)
