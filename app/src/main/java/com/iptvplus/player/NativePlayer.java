@@ -79,17 +79,12 @@ public class NativePlayer {
         Runnable fit = new Runnable() {
             @Override public void run() {
                 if (released || !attached) return;
-                try {
-                    int w = layout.getWidth(), h = layout.getHeight();
-                    if (w > 0 && h > 0) mp.getVLCVout().setWindowSize(w, h);
-                } catch (Throwable ignored) { }
+                // setVideoScale makes LibVLC's own VideoHelper recompute the surface from the new layout size
                 applyAspectNow();
-                layout.requestLayout();
             }
         };
-        ui.post(fit);
-        ui.postDelayed(fit, 300);
-        ui.postDelayed(fit, 900);
+        ui.postDelayed(fit, 250);
+        ui.postDelayed(fit, 800);
     }
 
     // Subtitle style needs a new LibVLC instance: rebuilt before the next playback when it changes
@@ -283,7 +278,7 @@ public class NativePlayer {
 
     private void attachViews() {
         if (released || attached) return;
-        try { mp.attachViews(layout, null, true, false); attached = true; applyAspectNow(); refreshLayout(); }
+        try { mp.attachViews(layout, null, true, false); attached = true; applyAspectNow(); }
         catch (Throwable t) { Diag.log("attachViews: " + t); }
     }
 
