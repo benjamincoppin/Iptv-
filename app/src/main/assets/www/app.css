@@ -377,3 +377,14 @@ body.kbd .tool-btn.f.focused{background:var(--text);color:#111;box-shadow:none}
 .skipbtn svg{width:16px;height:16px;fill:#111;stroke:#111}
 body.kbd .skipbtn.f.focused{box-shadow:0 0 0 3px var(--accent);transform:scale(1.05)}
 .pl.idle .skipbtn{opacity:1}
+
+/* player controls on narrow screens (phone in portrait) */
+.pl .ctrls{flex-wrap:wrap}
+@media (max-width:720px){
+  .pl .ctrls{gap:8px}
+  .pl .cb{width:44px;height:44px}
+  .pl .cb.big{width:56px;height:56px}
+  .pl .cb.txt{padding:0 12px;font-size:12px}
+  .pl .top h2{font-size:18px}
+  .skipbtn{bottom:190px;right:16px}
+}

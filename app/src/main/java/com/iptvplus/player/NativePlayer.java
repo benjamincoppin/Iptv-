@@ -66,6 +66,30 @@ public class NativePlayer {
 
         createVlc();
         attachViews();
+        // Rotation / resize: re-apply the video size once the new layout is known
+        layout.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override public void onLayoutChange(View v, int l, int t, int r, int b, int ol, int ot, int or, int ob) {
+                if (r - l != or - ol || b - t != ob - ot) refreshLayout();
+            }
+        });
+    }
+
+    /** Re-fits the picture to the current screen size (after a rotation, a resize, a return to the app). */
+    public void refreshLayout() {
+        Runnable fit = new Runnable() {
+            @Override public void run() {
+                if (released || !attached) return;
+                try {
+                    int w = layout.getWidth(), h = layout.getHeight();
+                    if (w > 0 && h > 0) mp.getVLCVout().setWindowSize(w, h);
+                } catch (Throwable ignored) { }
+                applyAspectNow();
+                layout.requestLayout();
+            }
+        };
+        ui.post(fit);
+        ui.postDelayed(fit, 300);
+        ui.postDelayed(fit, 900);
     }
 
     // Subtitle style needs a new LibVLC instance: rebuilt before the next playback when it changes
@@ -259,7 +283,7 @@ public class NativePlayer {
 
     private void attachViews() {
         if (released || attached) return;
-        try { mp.attachViews(layout, null, true, false); attached = true; applyAspectNow(); }
+        try { mp.attachViews(layout, null, true, false); attached = true; applyAspectNow(); refreshLayout(); }
         catch (Throwable t) { Diag.log("attachViews: " + t); }
     }
 

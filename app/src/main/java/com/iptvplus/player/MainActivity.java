@@ -204,6 +204,12 @@ public class MainActivity extends Activity {
         if (hasFocus) hideSystemUi();
     }
 
+    @Override public void onConfigurationChanged(Configuration c) {
+        super.onConfigurationChanged(c);
+        hideSystemUi();
+        if (player != null) player.refreshLayout();
+    }
+
     @Override protected void onStart() {
         super.onStart();
         Diag.setAlive(true);
