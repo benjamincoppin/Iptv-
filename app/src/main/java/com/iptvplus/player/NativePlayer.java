@@ -52,6 +52,7 @@ public class NativePlayer {
     private volatile boolean attached = false;
     private volatile boolean released = false;
     private String aspect = "auto";
+    private android.os.ParcelFileDescriptor pfd;
 
     public NativePlayer(Context ctx, FrameLayout box, Listener listener) {
         this.ctx = ctx.getApplicationContext();
@@ -211,10 +212,27 @@ public class NativePlayer {
                 try {
                     if (mp.isPlaying() || mp.getMedia() != null) mp.stop();
                     if (gen != generation) return;
-                    Media m = new Media(vlc, Uri.parse(url));
+                    Media m;
+                    if (url.startsWith("content://")) {
+                        // recording on a USB key chosen with the folder picker
+                        if (pfd != null) { try { pfd.close(); } catch (Throwable ignored) { } }
+                        pfd = ctx.getContentResolver().openFileDescriptor(Uri.parse(url), "r");
+                        m = new Media(vlc, pfd.getFileDescriptor());
+                    } else {
+                        m = new Media(vlc, Uri.parse(url));
+                    }
                     m.setHWDecoderEnabled(true, false);
                     boolean live = url.contains("/live/");
                     m.addOption(":network-caching=" + (live ? 2500 : 3000));
+                    if (live) {
+                        // local timeshift: pause / rewind the live stream from a disk buffer
+                        java.io.File ts = new java.io.File(ctx.getCacheDir(), "timeshift");
+                        ts.mkdirs();
+                        java.io.File[] old = ts.listFiles();
+                        if (old != null) for (java.io.File f : old) f.delete();
+                        m.addOption(":input-timeshift-path=" + ts.getAbsolutePath());
+                        m.addOption(":input-timeshift-granularity=52428800");
+                    }
                     m.addOption(":http-reconnect");
                     if (headers != null && headers.get("User-Agent") != null) m.addOption(":http-user-agent=" + headers.get("User-Agent"));
                     if (startMs > 0) m.addOption(":start-time=" + (startMs / 1000.0));

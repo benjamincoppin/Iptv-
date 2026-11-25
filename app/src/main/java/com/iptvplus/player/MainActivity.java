@@ -80,6 +80,8 @@ public class MainActivity extends Activity {
         setupVideo();
         setupWeb();
         hideSystemUi();
+        pendingLink = linkOf(getIntent());
+        new Thread(new Runnable() { @Override public void run() { try { RecStore.reschedule(MainActivity.this); } catch (Throwable t) { Diag.log("Reprogrammation : " + t); } } }).start();
     }
 
     private boolean detectTv() {
@@ -183,6 +185,10 @@ public class MainActivity extends Activity {
         });
     }
 
+    private void cacheDone(int id, boolean ok, String result, String err) {
+        js("window.NativeCache&&NativeCache.done(" + id + "," + ok + "," + JSONObject.quote(result) + "," + JSONObject.quote(err) + ")");
+    }
+
     private void js(final String code) {
         ui.post(new Runnable() { @Override public void run() { if (web != null) web.evaluateJavascript(code, null); } });
     }
@@ -202,6 +208,38 @@ public class MainActivity extends Activity {
     @Override public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) hideSystemUi();
+    }
+
+    // ---------- deep links (iptvplus://play?…, iptvplus://recordings) ----------
+    private volatile String pendingLink = null;
+
+    private static String linkOf(Intent i) {
+        if (i == null || i.getData() == null) return null;
+        String d = i.getData().toString();
+        return d.startsWith("iptvplus://") ? d : null;
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String l = linkOf(intent);
+        if (l != null) js("window.App&&App.deepLink&&App.deepLink(" + JSONObject.quote(l) + ")");
+    }
+
+    // ---------- recording folder picker ----------
+    private static final int PICK_FOLDER = 7101;
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != PICK_FOLDER) return;
+        boolean ok = false;
+        if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+            try {
+                getContentResolver().takePersistableUriPermission(data.getData(), Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                RecStore.setFolder(this, data.getData().toString());
+                ok = true;
+            } catch (Throwable t) { Diag.log("Dossier d'enregistrement : " + t); }
+        }
+        js("window.App&&App.recFolderPicked&&App.recFolderPicked(" + ok + "," + JSONObject.quote(RecStorage.describe(this)) + ")");
     }
 
     @Override public void onConfigurationChanged(Configuration c) {
@@ -416,6 +454,116 @@ public class MainActivity extends Activity {
                 js("window.App&&App.updateProgress&&App.updateProgress(" + JSONObject.quote(state) + "," + pct + "," + JSONObject.quote(msg == null ? "" : msg) + ")");
             }
         }); }
+
+        // ---------- catalogue / guide cache ----------
+        @JavascriptInterface public String cacheInfo(String key) { return CatalogCache.info(MainActivity.this, key); }
+
+        @JavascriptInterface public void cacheClear(String prefix) { CatalogCache.clear(MainActivity.this, prefix.length() == 0 ? null : prefix); }
+
+        @JavascriptInterface public void cacheDownload(final int id, final String url, final String key) {
+            pool.execute(new Runnable() {
+                @Override public void run() {
+                    try { String path = CatalogCache.download(MainActivity.this, url, key); cacheDone(id, true, path, ""); }
+                    catch (Throwable t) { cacheDone(id, false, "", String.valueOf(t.getMessage())); }
+                }
+            });
+        }
+
+        @JavascriptInterface public void guideBuild(final int id, final String url, final String key) {
+            pool.execute(new Runnable() {
+                @Override public void run() {
+                    try { String info = CatalogCache.buildGuide(MainActivity.this, url, key); Diag.log("Guide XMLTV : " + info.substring(info.indexOf('|') + 1)); cacheDone(id, true, info, ""); }
+                    catch (Throwable t) { Diag.log("Guide XMLTV indisponible : " + t.getMessage()); cacheDone(id, false, "", String.valueOf(t.getMessage())); }
+                }
+            });
+        }
+
+        // ---------- Android TV home: "Continuer à regarder" ----------
+        @JavascriptInterface public boolean watchNextSupported() { return WatchNext.supported(MainActivity.this); }
+
+        @JavascriptInterface public void watchNext(final String json) {
+            pool.execute(new Runnable() { @Override public void run() { WatchNext.sync(MainActivity.this, json); } });
+        }
+
+        @JavascriptInterface public String takeDeepLink() { String l = pendingLink; pendingLink = null; return l == null ? "" : l; }
+
+        // ---------- recordings ----------
+        @JavascriptInterface public String recList() {
+            org.json.JSONArray a = RecStore.all(MainActivity.this);
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.optJSONObject(i);
+                if (o != null && "done".equals(o.optString("status")) && o.optString("file").length() > 0) {
+                    try { o.put("exists", RecStorage.exists(MainActivity.this, o.optString("file"))); } catch (Exception ignored) { }
+                }
+                if (o != null) { try { o.put("active", RecordingService.isActive(o.optString("id"))); } catch (Exception ignored) { } }
+            }
+            return a.toString();
+        }
+
+        @JavascriptInterface public String recAdd(String json) {
+            try {
+                JSONObject o = new JSONObject(json);
+                if (!o.has("id")) o.put("id", Long.toString(System.currentTimeMillis(), 36) + Integer.toString((int) (Math.random() * 1000), 36));
+                if (!o.has("status")) o.put("status", "scheduled");
+                if (!o.has("mode")) o.put("mode", "live");
+                o.put("created", System.currentTimeMillis());
+                RecStore.put(MainActivity.this, o);
+                RecStore.reschedule(MainActivity.this);
+                return o.getString("id");
+            } catch (Exception e) { return ""; }
+        }
+
+        @JavascriptInterface public void recStop(String id) {
+            RecordingService.stop(MainActivity.this, id);
+            RecStore.disarm(MainActivity.this, id);
+            JSONObject o = RecStore.get(MainActivity.this, id);
+            if (o != null && "scheduled".equals(o.optString("status"))) RecStore.update(MainActivity.this, id, "status", "cancelled");
+        }
+
+        @JavascriptInterface public void recDelete(String id, boolean withFile) {
+            RecordingService.stop(MainActivity.this, id);
+            RecStore.disarm(MainActivity.this, id);
+            JSONObject o = RecStore.get(MainActivity.this, id);
+            if (o != null && withFile && o.optString("file").length() > 0) RecStorage.delete(MainActivity.this, o.optString("file"));
+            RecStore.remove(MainActivity.this, id);
+        }
+
+        @JavascriptInterface public void recCheck() {
+            pool.execute(new Runnable() { @Override public void run() { RecStore.reschedule(MainActivity.this); } });
+        }
+
+        @JavascriptInterface public String recSettings() {
+            JSONObject o = new JSONObject();
+            try {
+                o.put("before", RecStore.marginBefore(MainActivity.this));
+                o.put("after", RecStore.marginAfter(MainActivity.this));
+                o.put("planB", RecStore.planB(MainActivity.this));
+                o.put("folder", RecStorage.describe(MainActivity.this));
+            } catch (Exception ignored) { }
+            return o.toString();
+        }
+
+        @JavascriptInterface public void recSetSettings(String json) { RecStore.setSettings(MainActivity.this, json); }
+
+        @JavascriptInterface public String recVolumes() { return RecStorage.volumes(MainActivity.this); }
+
+        @JavascriptInterface public void recSetFolder(String spec) { RecStore.setFolder(MainActivity.this, spec); }
+
+        @JavascriptInterface public boolean recPickFolder() {
+            try {
+                Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                if (i.resolveActivity(getPackageManager()) == null) return false;
+                startActivityForResult(i, PICK_FOLDER);
+                return true;
+            } catch (Throwable t) { return false; }
+        }
+
+        @JavascriptInterface public void requestNotifications() {
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                ui.post(new Runnable() { @Override public void run() { requestPermissions(new String[]{ "android.permission.POST_NOTIFICATIONS" }, 7102); } });
+            }
+        }
 
         /** auto | 16:9 | 4:3 | fill (étirer) | zoom (remplir en rognant) */
         @JavascriptInterface public void setAspect(final String mode) {
