@@ -158,10 +158,12 @@
     if (Player.open) { try { var s = JSON.parse(Native.state()); if (s.pos) Player._pausedAt = s.pos; } catch (e) { } }
   };
   App.onAppResume = function () {
+    if (window.Sync) Sync.refresh(10000);
     if (Live.open) { /* restart current live stream after the app comes back */ Native.resume(); }
   };
 
   App.start = function () {
+    if (window.Sync) setTimeout(Sync.now, 500);
     return App.go(Settings.get('startLive') ? 'live' : 'home');
   };
 

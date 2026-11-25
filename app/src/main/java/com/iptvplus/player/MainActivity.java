@@ -288,6 +288,15 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public boolean isTv() { return isTv; }
 
+        @JavascriptInterface public String sha256(String text) {
+            try {
+                byte[] d = java.security.MessageDigest.getInstance("SHA-256").digest(text.getBytes("UTF-8"));
+                StringBuilder b = new StringBuilder();
+                for (byte x : d) b.append(String.format("%02x", x & 0xff));
+                return b.toString();
+            } catch (Exception e) { return ""; }
+        }
+
         @JavascriptInterface public String lastCrash() { return Diag.takeCrash(); }
 
         @JavascriptInterface public String journal() { return Diag.journal(); }

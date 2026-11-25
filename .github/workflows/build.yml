@@ -40,7 +40,7 @@ jobs:
         run: |
           if [ -n "$TMDB_API_KEY" ]; then
             KEY=$(printf '%s' "$TMDB_API_KEY" | tr -cd 'A-Za-z0-9._-')
-            printf "window.IPTV_CONFIG = { tmdbKey: '%s' };\n" "$KEY" > app/src/main/assets/www/js/config.js
+            sed -i "s/tmdbKey: ''/tmdbKey: '$KEY'/" app/src/main/assets/www/js/config.js
           else
             echo "::warning::Secret TMDB_API_KEY absent : images TMDB désactivées par défaut"
           fi

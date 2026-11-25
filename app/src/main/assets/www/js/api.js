@@ -261,7 +261,7 @@
   window.TMDB = TMDB;
 
   // ---------- settings ----------
-  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', tmdbKey: '' };
+  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', tmdbKey: '', syncUrl: '' };
   window.Settings = {
     all: function () { var s = U.store.get('settings', {}); var o = {}; for (var k in defaults) o[k] = (k in s) ? s[k] : defaults[k]; return o; },
     get: function (k) { return this.all()[k]; },
@@ -290,21 +290,39 @@
     get: function (type, id) { return this.all()[type + ':' + id] || null; },
     save: function (item) {
       var all = this.all();
-      item.ts = Date.now();
+      item.ts = item.watched = Date.now();
+      delete item.hidden;
       all[item.type + ':' + item.id] = item;
       var keys = Object.keys(all);
       if (keys.length > 300) {
         keys.sort(function (a, b) { return all[a].ts - all[b].ts; }).slice(0, keys.length - 300).forEach(function (k) { delete all[k]; });
       }
       U.store.set('hist', all);
+      if (window.Sync) Sync.later();
     },
-    remove: function (type, id) { var all = this.all(); delete all[type + ':' + id]; U.store.set('hist', all); },
-    clear: function () { U.store.set('hist', {}); U.store.set('recentLive', []); },
+    // Hide from "Reprendre la lecture" (kept as a dated marker so other devices hide it too)
+    dismiss: function (h) {
+      var all = this.all(), now = Date.now();
+      Object.keys(all).forEach(function (k) {
+        var x = all[k];
+        var same = h.type === 'episode' ? (x.type === 'episode' && String(x.seriesId) === String(h.seriesId)) : (x.type === h.type && String(x.id) === String(h.id));
+        if (same) { x.hidden = true; x.ts = now; }
+      });
+      U.store.set('hist', all);
+      if (window.Sync) Sync.soon();
+    },
+    remove: function (type, id) { var all = this.all(); var x = all[type + ':' + id]; if (x) { x.hidden = true; x.ts = Date.now(); } U.store.set('hist', all); },
+    clear: function () {
+      var all = this.all(), now = Date.now();
+      Object.keys(all).forEach(function (k) { all[k].hidden = true; all[k].ts = now; });
+      U.store.set('hist', all); U.store.set('recentLive', []);
+      if (window.Sync) Sync.soon();
+    },
     // "Reprendre la lecture": movies & one entry per series, unfinished
     resumeList: function () {
       var all = this.all(), seen = {}, out = [];
       Object.keys(all).map(function (k) { return all[k]; })
-        .filter(function (h) { return h.type !== 'live' && h.dur > 0 && h.pos > 30000 && h.pos < h.dur * 0.94; })
+        .filter(function (h) { return !h.hidden && h.type !== 'live' && h.dur > 0 && h.pos > 30000 && h.pos < h.dur * 0.94; })
         .sort(function (a, b) { return b.ts - a.ts; })
         .forEach(function (h) {
           var key = h.type === 'episode' ? 's' + h.seriesId : 'm' + h.id;
@@ -317,7 +335,7 @@
       var all = this.all(), best = null;
       Object.keys(all).forEach(function (k) {
         var h = all[k];
-        if (h.type === 'episode' && String(h.seriesId) === String(seriesId) && (!best || h.ts > best.ts)) best = h;
+        if (h.type === 'episode' && String(h.seriesId) === String(seriesId) && h.dur && (!best || (h.watched || h.ts) > (best.watched || best.ts))) best = h;
       });
       return best;
     },

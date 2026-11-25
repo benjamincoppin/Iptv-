@@ -62,6 +62,11 @@
   }
 
   Nav.reveal = function (el) {
+    // Elements of the home banner: always show the whole banner (scroll the page to the very top)
+    if (el.closest('[data-reveal-top]')) {
+      var pg = document.getElementById('page');
+      if (pg && pg.contains(el)) { pg.scrollTop = 0; return; }
+    }
     scrollables(el).forEach(function (sc) {
       var r = el.getBoundingClientRect(), s = sc.getBoundingClientRect(), cs = getComputedStyle(sc);
       var padTop = sc.id === 'page' ? parseInt(getComputedStyle(document.documentElement).getPropertyValue('--nav')) + 20 : 16;
@@ -107,6 +112,20 @@
   };
 
   var DIRS = { 37: 'left', 38: 'up', 39: 'right', 40: 'down' };
+  var pendingLong = null;
+
+  document.addEventListener('keyup', function (e) {
+    if (e.keyCode !== 13 && e.keyCode !== 23) return;
+    var p = pendingLong; pendingLong = null;
+    if (p && p.isConnected) p.click();
+  }, true);
+  // Touch: long tap
+  document.addEventListener('contextmenu', function (e) {
+    var el = e.target.closest && e.target.closest('[data-longpress]');
+    if (!el) return;
+    e.preventDefault();
+    el.dispatchEvent(new CustomEvent('longpress', { bubbles: true }));
+  }, true);
 
   document.addEventListener('keydown', function (e) {
     var kc = e.keyCode;
@@ -137,11 +156,23 @@
       e.preventDefault();
       if (!cur || !cur.isConnected) { Nav.first(); return; }
       if (isInput(cur)) { cur.focus(); return; }
+      // Elements with data-longpress: short press = click on release, long press = "longpress" event
+      if (cur.hasAttribute('data-longpress')) {
+        if (e.repeat) {
+          if (pendingLong === cur) { pendingLong = null; cur.dispatchEvent(new CustomEvent('longpress', { bubbles: true })); }
+          return;
+        }
+        pendingLong = cur;
+        return;
+      }
+      if (e.repeat) return;
       cur.click();
       return;
     }
     e.preventDefault();
     if (!cur || !cur.isConnected || !visible(cur)) { Nav.first(); return; }
+    var hook = cur.closest('[data-navhook]');
+    if (hook && hook.__navHook && hook.__navHook(dir, cur)) return;
     Nav.move(dir);
   }, true);
 

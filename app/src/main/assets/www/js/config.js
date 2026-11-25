@@ -1,2 +1,3 @@
-/* Remplacé à la compilation (GitHub Actions) par la clé TMDB du secret TMDB_API_KEY */
-window.IPTV_CONFIG = { tmdbKey: '' };
+/* tmdbKey est remplacée à la compilation (GitHub Actions) par le secret TMDB_API_KEY.
+   syncUrl : adresse du script sync.php (synchronisation de « Reprendre la lecture »). */
+window.IPTV_CONFIG = { tmdbKey: '', syncUrl: '' };

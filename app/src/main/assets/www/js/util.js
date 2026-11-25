@@ -125,6 +125,42 @@
     img.src = rest[0];
   };
 
+  // SHA-256 (hex) for the sync key when the native helper is not available
+  U.sha256 = function (ascii) {
+    function rr(v, a) { return (v >>> a) | (v << (32 - a)); }
+    var str = unescape(encodeURIComponent(ascii));
+    var maxWord = Math.pow(2, 32), result = '', words = [], bitLen = str.length * 8, i, j;
+    var hash = [], k = [], pc = 0, isC = {};
+    for (var c = 2; pc < 64; c++) {
+      if (!isC[c]) {
+        for (i = 0; i < 313; i += c) isC[i] = c;
+        hash[pc] = (Math.pow(c, .5) * maxWord) | 0;
+        k[pc++] = (Math.pow(c, 1 / 3) * maxWord) | 0;
+      }
+    }
+    hash = hash.slice(0, 8);
+    str += '\x80';
+    while (str.length % 64 - 56) str += '\x00';
+    for (i = 0; i < str.length; i++) { j = str.charCodeAt(i); words[i >> 2] |= j << ((3 - i) % 4) * 8; }
+    words[words.length] = ((bitLen / maxWord) | 0);
+    words[words.length] = (bitLen);
+    for (j = 0; j < words.length;) {
+      var w = words.slice(j, j += 16), oldHash = hash;
+      hash = hash.slice(0, 8);
+      for (i = 0; i < 64; i++) {
+        var w15 = w[i - 15], w2 = w[i - 2], a = hash[0], e = hash[4];
+        var t1 = hash[7] + (rr(e, 6) ^ rr(e, 11) ^ rr(e, 25)) + ((e & hash[5]) ^ ((~e) & hash[6])) + k[i] +
+          (w[i] = (i < 16) ? w[i] : (w[i - 16] + (rr(w15, 7) ^ rr(w15, 18) ^ (w15 >>> 3)) + w[i - 7] + (rr(w2, 17) ^ rr(w2, 19) ^ (w2 >>> 10))) | 0);
+        var t2 = (rr(a, 2) ^ rr(a, 13) ^ rr(a, 22)) + ((a & hash[1]) ^ (a & hash[2]) ^ (hash[1] & hash[2]));
+        hash = [(t1 + t2) | 0].concat(hash);
+        hash[4] = (hash[4] + t1) | 0;
+      }
+      for (i = 0; i < 8; i++) hash[i] = (hash[i] + oldHash[i]) | 0;
+    }
+    for (i = 0; i < 8; i++) for (j = 3; j + 1; j--) { var b = (hash[i] >> (j * 8)) & 255; result += ((b < 16) ? 0 : '') + b.toString(16); }
+    return result;
+  };
+
   U.debounce = function (fn, ms) {
     var t;
     return function () { var a = arguments, s = this; clearTimeout(t); t = setTimeout(function () { fn.apply(s, a); }, ms); };

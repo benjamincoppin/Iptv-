@@ -31,7 +31,7 @@
     var pct = h.dur ? Math.round(h.pos / h.dur * 100) : 0;
     var go = h.type === 'movie' ? 'movie:' + h.id : 'serie:' + h.seriesId;
     var label = h.type === 'episode' ? (h.seriesName || '') + ' · S' + h.season + ' É' + h.ep : h.name;
-    return '<button class="f card" data-go="' + go + '" data-resume="1" data-key="r' + h.type + h.id + '">' +
+    return '<button class="f card" data-go="' + go + '" data-resume="1" data-longpress="1" data-h="' + U.esc(h.type + ':' + h.id) + '" data-key="r' + h.type + h.id + '">' +
       '<div class="thumb"><span class="ph">' + U.esc(U.initials(h.seriesName || h.name)) + '</span>' + U.img(h.img) + '</div>' +
       '<div class="bar"><i style="width:' + pct + '%"></i></div><div class="lbl">' + U.esc(label) + '</div></button>';
   }
@@ -99,20 +99,27 @@
     page.innerHTML = '<div class="spinner" style="margin-top:160px"></div>';
     return Promise.all([API.vodStreams().catch(function () { return []; }), API.seriesList().catch(function () { return []; })]).then(function (r) {
       var vod = r[0].slice().sort(byAdded), ser = r[1].slice().sort(byModified);
-      var hero = vod.find(function (m) { return m.stream_icon; }) || vod[0];
+      // Carousel: 5 newest movies + 5 newest series, alternating
+      var mv5 = vod.filter(function (m) { return m.stream_icon; }).slice(0, 5);
+      var se5 = ser.filter(function (s) { return s.cover; }).slice(0, 5);
+      var slides = [];
+      for (var si = 0; si < 5; si++) {
+        if (mv5[si]) slides.push({ kind: 'movie', x: mv5[si] });
+        if (se5[si]) slides.push({ kind: 'series', x: se5[si] });
+      }
       var html = '';
-      if (hero) {
-        html += '<section class="hero"><div class="bg"></div><div class="in nav-group">' +
-          '<div class="kicker">À la une · Film</div><h1>' + U.esc(U.noYear(U.cleanName(hero.name))) + '</h1>' +
-          '<div class="meta">' + [U.year(hero.year || hero.name), ratingOf(hero) ? '★ ' + ratingOf(hero) : ''].filter(Boolean).join(' · ') + '</div>' +
-          '<div class="plot"></div>' +
+      if (slides.length) {
+        html += '<section class="hero" data-reveal-top="1"><div class="bg"></div><div class="bg bg2"></div><div class="in nav-group">' +
+          '<div class="kicker"></div><h1></h1><div class="meta"></div><div class="plot"></div>' +
           '<div class="actions"><button class="f btn primary" id="hero-play">' + I.play + ' Lecture</button>' +
-          '<button class="f btn" data-go="movie:' + hero.stream_id + '">Plus d\'infos</button></div></div></section>';
+          '<button class="f btn" id="hero-info">Plus d\'infos</button></div></div>' +
+          (slides.length > 1 ? '<div class="dots">' + slides.map(function (s, i) { return '<button class="dot" data-i="' + i + '" aria-label="Nouveauté ' + (i + 1) + '"></button>'; }).join('') + '</div>' : '') +
+          '</section>';
       } else {
         html += '<div style="height:20px"></div>';
       }
       var resume = Hist.resumeList();
-      if (resume.length) html += rail('Reprendre la lecture', resume.map(resumeCard).join(''));
+      html += '<div id="resume-sec">' + (resume.length ? rail('Reprendre la lecture', resume.map(resumeCard).join('')) : '') + '</div>';
       var favCh = Fav.list('live'), recCh = Hist.recentLive();
       if (favCh.length) html += rail('Chaînes favorites', favCh.slice(0, 30).map(chanCard).join(''));
       else if (recCh.length) html += rail('Chaînes récentes', recCh.slice(0, 20).map(chanCard).join(''));
@@ -124,22 +131,128 @@
       html += '<div style="height:40px"></div>';
       page.innerHTML = html;
       V.bindGo(page);
-      if (hero) {
-        var hp = U.$('#hero-play', page);
-        hp.addEventListener('click', function () { V.playMovie(hero); });
-        var bg = U.$('.hero .bg', page);
-        if (hero.stream_icon) bg.style.backgroundImage = 'url("' + hero.stream_icon.replace(/"/g, '%22') + '")';
-        API.vodInfo(hero.stream_id).then(function (inf) {
-          var info = inf && inf.info || {};
-          var bd = info.backdrop_path && info.backdrop_path[0];
-          if (bd && bg.isConnected) bg.style.backgroundImage = 'url("' + String(bd).replace(/"/g, '%22') + '")';
-          var pl = U.$('.hero .plot', page);
-          if (pl && info.plot) pl.textContent = info.plot;
-          var meta = U.$('.hero .meta', page);
-          if (meta) meta.textContent = [U.year(info.releasedate || hero.name), info.genre, info.duration_secs ? U.minutesLabel(info.duration_secs / 60) : '', ratingOf(hero) ? '★ ' + ratingOf(hero) : ''].filter(Boolean).join(' · ');
-        }).catch(function () { });
-      }
+      if (slides.length) V.heroCarousel(page, slides);
+      bindResume(page);
+      Sync.onChange = function () { V.updateResume(page); };
+      Sync.refresh(30000);
     });
+  };
+
+  // "Reprendre la lecture": long press (remote OK held / long tap) to remove an item
+  function bindResume(page) {
+    var sec = U.$('#resume-sec', page);
+    if (!sec || sec.__bound) return;
+    sec.__bound = true;
+    sec.addEventListener('longpress', function (e) {
+      var b = e.target.closest('[data-h]');
+      if (!b) return;
+      var h = Hist.all()[b.dataset.h];
+      if (!h) return;
+      var label = h.type === 'episode' ? (h.seriesName || 'cette série') : (h.name || 'ce film');
+      Modal.choose(label, [
+        { label: 'Retirer de « Reprendre la lecture »', value: 'rm' },
+        { label: 'Annuler', value: 'no' }
+      ], function (v) {
+        if (v !== 'rm') return;
+        Hist.dismiss(h);
+        U.toast('Retiré de « Reprendre la lecture »');
+        V.updateResume(page);
+      });
+    });
+  }
+  // Redraw only the "Reprendre la lecture" row (after a removal or a sync from another device)
+  V.updateResume = function (page) {
+    var sec = U.$('#resume-sec', page);
+    if (!sec || !sec.isConnected) return;
+    var list = Hist.resumeList();
+    var focusedIdx = -1;
+    if (Nav.current && sec.contains(Nav.current)) focusedIdx = U.$$('.card', sec).indexOf(Nav.current);
+    sec.innerHTML = list.length ? rail('Reprendre la lecture', list.map(resumeCard).join('')) : '';
+    if (focusedIdx >= 0) {
+      var cards = U.$$('.card', sec);
+      var f = cards[Math.min(focusedIdx, cards.length - 1)];
+      if (f) Nav.focus(f); else Nav.first(null, page);
+    }
+  };
+
+  // ---------- home banner carousel ----------
+  V.heroCarousel = function (page, slides) {
+    var hero = U.$('.hero', page), cur = -1, timer = null, layer = 0;
+    var bgs = U.$$('.hero .bg', page);
+    function details(s) {
+      if (s.info) return Promise.resolve(s.info);
+      var p = s.kind === 'movie' ? API.vodInfo(s.x.stream_id) : API.seriesInfo(s.x.series_id);
+      return p.then(function (r) {
+        var info = (r && r.info) || {};
+        s.info = {
+          backdrop: (info.backdrop_path && info.backdrop_path[0]) || (s.x.backdrop_path && s.x.backdrop_path[0]) || '',
+          plot: info.plot || s.x.plot || '',
+          meta: s.kind === 'movie'
+            ? [U.year(info.releasedate || s.x.name), info.genre, info.duration_secs ? U.minutesLabel(info.duration_secs / 60) : '', ratingOf(s.x) ? '★ ' + ratingOf(s.x) : '']
+            : [U.year(info.releaseDate || s.x.releaseDate), info.genre || s.x.genre, ratingOf(s.x) ? '★ ' + ratingOf(s.x) : '']
+        };
+        return s.info;
+      }).catch(function () { s.info = { backdrop: '', plot: s.x.plot || '', meta: [] }; return s.info; });
+    }
+    function show(i) {
+      if (!hero.isConnected) { clearInterval(timer); return; }
+      i = (i + slides.length) % slides.length;
+      if (i === cur) return;
+      cur = i;
+      var s = slides[i], name = U.noYear(U.cleanName(s.x.name));
+      U.$('.kicker', hero).textContent = 'Nouveauté · ' + (s.kind === 'movie' ? 'Film' : 'Série');
+      U.$('h1', hero).textContent = name;
+      U.$('.meta', hero).textContent = [U.year(s.x.year || s.x.releaseDate || s.x.name), ratingOf(s.x) ? '★ ' + ratingOf(s.x) : ''].filter(Boolean).join(' · ');
+      U.$('.plot', hero).textContent = s.x.plot || '';
+      U.$$('.dot', hero).forEach(function (d) { d.classList.toggle('on', +d.dataset.i === i); });
+      setBg(U.imgUrl(s.kind === 'movie' ? s.x.stream_icon : s.x.cover));
+      details(s).then(function (d) {
+        if (cur !== i || !hero.isConnected) return;
+        if (d.backdrop) setBg(U.imgUrl(d.backdrop));
+        if (d.plot) U.$('.plot', hero).textContent = d.plot;
+        var m = d.meta.filter(Boolean); if (m.length) U.$('.meta', hero).textContent = m.join(' · ');
+      });
+      details(slides[(i + 1) % slides.length]); // prefetch the next one
+    }
+    function setBg(url) {
+      if (!url) return;
+      var next = bgs[1 - layer], prev = bgs[layer];
+      var img = new Image();
+      img.onload = function () {
+        next.style.backgroundImage = 'url("' + url.replace(/"/g, '%22') + '")';
+        next.classList.add('on'); prev.classList.remove('on');
+        layer = 1 - layer;
+      };
+      img.src = url;
+    }
+    function restart() { clearInterval(timer); if (slides.length > 1) timer = setInterval(function () { show(cur + 1); }, 8000); }
+    function current() { return slides[cur]; }
+    U.$('#hero-play', hero).addEventListener('click', function () {
+      var s = current();
+      if (s.kind === 'movie') V.playMovie(s.x); else App.go('serie', { id: s.x.series_id, resume: true });
+    });
+    U.$('#hero-info', hero).addEventListener('click', function () {
+      var s = current();
+      App.go(s.kind === 'movie' ? 'movie' : 'serie', { id: s.kind === 'movie' ? s.x.stream_id : s.x.series_id });
+    });
+    U.$$('.dot', hero).forEach(function (d) { d.addEventListener('click', function () { show(+d.dataset.i); restart(); }); });
+    // Remote: ← on "Lecture" = previous, → on "Plus d'infos" = next
+    hero.setAttribute('data-navhook', '1');
+    hero.__navHook = function (dir, el) {
+      if (dir === 'left' && el.id === 'hero-play') { show(cur - 1); restart(); return true; }
+      if (dir === 'right' && el.id === 'hero-info') { show(cur + 1); restart(); return true; }
+      return false;
+    };
+    // Touch: swipe
+    var x0 = null;
+    hero.addEventListener('touchstart', function (e) { x0 = e.touches[0].clientX; }, { passive: true });
+    hero.addEventListener('touchend', function (e) {
+      if (x0 == null) return;
+      var dx = e.changedTouches[0].clientX - x0; x0 = null;
+      if (Math.abs(dx) > 50) { show(cur + (dx < 0 ? 1 : -1)); restart(); }
+    }, { passive: true });
+    show(0);
+    restart();
   };
 
   // ---------- catalog grid (films / séries) ----------
@@ -474,6 +587,7 @@
       row('aspectVod', 'Format d\'image · Films et séries', 'Original, 16:9, 4:3, étirer ou zoom', Aspect.labels[Aspect.get('vod')]) +
       row('tmdb', 'Images des épisodes (TMDB)', 'Clé API TMDB pour les images et résumés manquants', TMDB.enabled() ? 'Activé' : 'Désactivé') +
       row('autoNext', 'Épisode suivant automatique', 'Enchaîne les épisodes d\'une série', s.autoNext ? 'Oui' : 'Non') +
+      row('sync', 'Synchronisation entre appareils', Sync.url() ? ('« Reprendre la lecture » partagé · ' + (U.store.get('syncLast', 0) ? 'dernière synchro ' + U.hm(U.store.get('syncLast', 0)) : 'jamais synchronisé')) : 'Adresse du script sync.php non configurée', Sync.url() ? 'Activée' : 'Désactivée') +
       row('diag', 'Diagnostic', 'Journal technique à m\'envoyer en cas de problème', '') +
       row('reload', 'Recharger les listes', 'Récupère les nouvelles chaînes, films et séries', '') +
       row('clearHist', 'Effacer l\'historique', 'Vide « Reprendre la lecture » et les chaînes récentes', '') +
@@ -494,6 +608,19 @@
           if (!TMDB.enabled()) { U.toast('TMDB désactivé'); App.refresh(); return; }
           TMDB.get('/configuration').then(function () { U.toast('Clé TMDB valide'); }, function () { U.toast('Clé TMDB refusée, vérifie-la'); });
           App.refresh();
+        });
+        else if (k === 'sync') Modal.choose('Synchronisation', [
+          { label: 'Synchroniser maintenant', value: 'now' },
+          { label: 'Adresse du script sync.php…', value: 'url' }
+        ], function (c) {
+          if (c === 'now') { if (!Sync.enabled()) { U.toast('Configure d\'abord l\'adresse du script'); return; } U.toast('Synchronisation…'); Sync.now().then(function () { U.toast(Sync.error ? 'Échec : ' + Sync.error : 'Synchronisé'); App.refresh(); }); }
+          else setTimeout(function () {
+            Modal.prompt('Adresse du script sync.php', 'Exemple : https://mondomaine.fr/iptvplus/sync.php. Laisse vide pour utiliser l\'adresse intégrée à l\'appli.', Settings.get('syncUrl') || '', function (val) {
+              Settings.set('syncUrl', val.trim());
+              if (Sync.enabled()) Sync.now().then(function () { U.toast(Sync.error ? 'Échec : ' + Sync.error : 'Synchronisé'); App.refresh(); });
+              else App.refresh();
+            });
+          }, 0);
         });
         else if (k === 'diag') App.showReport('Diagnostic IPTV+', 'IPTV+ ' + Native.version() + '\n\n' + (Native.journal() || '(journal vide)'));
         else if (k === 'autoNext') { Settings.set('autoNext', !Settings.get('autoNext')); App.refresh(); }

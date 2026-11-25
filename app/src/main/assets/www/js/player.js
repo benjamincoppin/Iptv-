@@ -301,6 +301,7 @@
   };
   function closeInner() {
     readState();
+    if (window.Sync) setTimeout(Sync.soon, 0);
     if (!ended && state.pos > 0) saveHist(state.pos, state.dur);
     clearInterval(poll); clearInterval(saveTimer); clearInterval(nextTimer); clearTimeout(idleTimer);
     Native.stop();
