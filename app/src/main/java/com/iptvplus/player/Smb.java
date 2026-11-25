@@ -120,6 +120,11 @@ public final class Smb {
         } catch (Throwable t) { throw new Exception(friendly(t)); }
     }
 
+    public static OutputStream openOut(Context ctx, String uri, boolean append) throws Exception {
+        try { return new java.io.BufferedOutputStream(new SmbFileOutputStream(new SmbFile(uri, ctx(ctx)), append), 1 << 20); }
+        catch (Throwable t) { throw new Exception(friendly(t)); }
+    }
+
     /** Writes then deletes a small file. Returns null when it works, else a readable error. */
     public static String test(Context ctx) {
         try {

@@ -55,6 +55,13 @@ public class RecordingService extends Service {
 
     public static boolean isActive(String id) { return jobs.containsKey(id); }
 
+    /** Number of film / episode downloads running (they go one at a time). */
+    public static int activeVod() {
+        int n = 0;
+        for (Job j : jobs.values()) if ("vod".equals(j.rec.optString("mode"))) n++;
+        return n;
+    }
+
     /** Live progress of the running jobs: {id: {written, total, speed, mode, start, end, startedAt}} */
     public static String progressJson() {
         JSONObject o = new JSONObject();
@@ -86,7 +93,8 @@ public class RecordingService extends Service {
         String id = intent != null ? intent.getStringExtra("id") : null;
         if (id != null && !jobs.containsKey(id)) {
             JSONObject rec = RecStore.get(this, id);
-            if (rec != null) {
+            boolean busyVod = rec != null && "vod".equals(rec.optString("mode")) && activeVod() > 0;
+            if (rec != null && !busyVod && !"paused".equals(rec.optString("status")) && !"done".equals(rec.optString("status"))) {
                 Job j = new Job(this, rec);
                 jobs.put(id, j);
                 acquireLocks();
@@ -145,7 +153,7 @@ public class RecordingService extends Service {
         else {
             Job j = list.get(0);
             String title = j.rec.optString("title");
-            if ("replay".equals(j.rec.optString("mode"))) {
+            if ("replay".equals(j.rec.optString("mode")) || "vod".equals(j.rec.optString("mode"))) {
                 if (j.total > 0) {
                     progress = (int) Math.min(100, j.written * 100 / j.total);
                     String eta = j.speed > 0 ? " · " + Math.max(1, (j.total - j.written) / j.speed / 60) + " min restantes" : "";
@@ -169,7 +177,7 @@ public class RecordingService extends Service {
             if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(chId) == null)
                 nm.createNotificationChannel(new NotificationChannel(chId, "Enregistrements terminés", NotificationManager.IMPORTANCE_DEFAULT));
             boolean ok = "done".equals(r.optString("status"));
-            boolean replay = "replay".equals(r.optString("mode"));
+            boolean replay = "replay".equals(r.optString("mode")) || "vod".equals(r.optString("mode"));
             String title = ok ? (replay ? "Téléchargement terminé" : "Enregistrement terminé") : (replay ? "Échec du téléchargement" : "Échec de l'enregistrement");
             String text = r.optString("title") + (ok ? " · " + mb(r.optLong("size")) : " · " + r.optString("error"));
             if (r.optBoolean("replayPending")) text += " · nouvel essai depuis le replay";
@@ -235,6 +243,7 @@ public class RecordingService extends Service {
         Job(RecordingService svc, JSONObject rec) { this.svc = svc; this.rec = rec; this.id = rec.optString("id"); }
 
         @Override public void run() {
+            if ("vod".equals(rec.optString("mode"))) { runVod(); return; }
             Context ctx = svc;
             boolean replay = "replay".equals(rec.optString("mode"));
             long end = rec.optLong("end") + RecStore.marginAfter(ctx) * 60000L;
@@ -368,6 +377,104 @@ public class RecordingService extends Service {
                 }
                 Thread.sleep(Math.max(1000, target / 2));
             }
+        }
+
+        // ---------- films / episodes ----------
+        private OutputStream vodOut;
+
+        private void runVod() {
+            Context ctx = svc;
+            String error = null;
+            boolean complete = false;
+            try {
+                RecStore.update(ctx, id, "status", "recording");
+                RecStore.update(ctx, id, "error", "");
+                String file = rec.optString("file");
+                long have = file.length() > 0 ? RecStorage.length(ctx, file) : -1;
+                if (have > 0) {
+                    vodOut = RecStorage.reopen(ctx, file, true);
+                    written = have;
+                    Diag.log("Téléchargement repris : " + rec.optString("title") + " à " + mb(have));
+                } else {
+                    RecStorage.Target t = RecStorage.create(ctx, rec);
+                    vodOut = t.stream;
+                    file = t.uri;
+                    RecStore.update(ctx, id, "file", t.uri);
+                    RecStore.update(ctx, id, "name", t.name);
+                    RecStore.update(ctx, id, "note", t.note == null ? "" : t.note);
+                    Diag.log("Téléchargement démarré : " + rec.optString("title") + " → " + t.name);
+                }
+                if (rec.optLong("total") > 0) total = rec.optLong("total");
+                complete = downloadVod(ctx, file);
+            } catch (Throwable e) {
+                error = String.valueOf(e.getMessage());
+                Diag.log("Téléchargement en échec : " + e);
+            } finally {
+                try { if (vodOut != null) vodOut.close(); } catch (Throwable ignored) { }
+            }
+            RecStore.update(ctx, id, "size", written);
+            JSONObject cur = RecStore.get(ctx, id);
+            if (cur != null) {
+                try {
+                    String st = cur.optString("status");
+                    if (cancelled) { if (!"paused".equals(st)) cur.put("status", "paused"); }
+                    else if (complete) { cur.put("status", "done"); cur.put("finished", System.currentTimeMillis()); }
+                    else { cur.put("status", "failed"); cur.put("error", error != null ? error : "Téléchargement interrompu"); }
+                    if (total > 0) cur.put("total", total);
+                    RecStore.put(ctx, cur);
+                    if (!cancelled) svc.notifyDone(cur);
+                } catch (Exception ignored) { }
+            }
+            svc.jobFinished(id);
+            RecStore.reschedule(ctx); // next one in the queue
+        }
+
+        /** Resumable download (HTTP Range). Returns true once the whole file is there. */
+        private boolean downloadVod(Context ctx, String file) throws Exception {
+            String url = rec.optString("url");
+            int failures = 0;
+            Exception last = null;
+            while (!cancelled) {
+                if (total > 0 && written >= total) return true;
+                Net.Response r = null;
+                try {
+                    r = Net.open(url, 20000, 60000, written > 0 ? "bytes=" + written + "-" : null);
+                    if (r.code == 416 && written > 0) return true; // nothing left to get
+                    if (r.code >= 400 || r.body == null) throw new Exception("Fichier indisponible sur le serveur (HTTP " + r.code + ")");
+                    if (r.code == 206) {
+                        String cr = r.conn.getHeaderField("Content-Range");
+                        int slash = cr == null ? -1 : cr.lastIndexOf('/');
+                        if (slash > 0) { try { total = Long.parseLong(cr.substring(slash + 1).trim()); } catch (Exception ignored) { } }
+                        else if (r.length > 0) total = written + r.length;
+                    } else {
+                        // the server ignored the resume request: start the file again
+                        if (written > 0) {
+                            vodOut.close();
+                            vodOut = RecStorage.reopen(ctx, file, false);
+                            written = 0;
+                        }
+                        if (r.length > 0) total = r.length;
+                    }
+                    if (total > 0) RecStore.update(svc, id, "total", total);
+                    long before = written;
+                    copy(r, vodOut, 0);
+                    vodOut.flush();
+                    if (cancelled) return false;
+                    if (total <= 0) return written > 0; // size unknown: the end of the stream is the end of the file
+                    if (written >= total) return true;
+                    if (written > before) failures = 0; // cut in the middle: continue where it stopped
+                    throw new Exception("Connexion coupée");
+                } catch (Exception e) {
+                    last = e;
+                    if (cancelled) return false;
+                    if (++failures > 20) throw last;
+                    Diag.log("Téléchargement : " + e.getMessage() + ", nouvel essai (" + failures + ")");
+                    long wait = Math.min(60000L, 3000L * failures);
+                    long until = System.currentTimeMillis() + wait;
+                    while (!cancelled && System.currentTimeMillis() < until) Thread.sleep(500);
+                } finally { if (r != null) r.close(); }
+            }
+            return false;
         }
 
         /** Programme already aired: finite download from the provider's replay (timeshift). */

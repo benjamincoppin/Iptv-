@@ -62,6 +62,11 @@ public final class RecStorage {
     }
 
     private static String fileName(JSONObject rec) {
+        if (rec.optString("fileName").length() > 0) {
+            String n = rec.optString("fileName").replaceAll("[\\\\/:*?\"<>|]", " ").replaceAll("\\s+", " ").trim();
+            if (n.length() > 140) { int dot = n.lastIndexOf('.'); String ext = dot > 0 ? n.substring(dot) : ""; n = n.substring(0, 140 - ext.length()) + ext; }
+            return n;
+        }
         String t = rec.optString("title", "Enregistrement"), c = rec.optString("channel", "");
         String d = new SimpleDateFormat("yyyy-MM-dd HH'h'mm", Locale.FRANCE).format(new Date(rec.optLong("start", System.currentTimeMillis())));
         String n = (t + (c.length() > 0 ? " - " + c : "") + " - " + d).replaceAll("[\\\\/:*?\"<>|]", " ").replaceAll("\\s+", " ").trim();
@@ -100,7 +105,8 @@ public final class RecStorage {
         if (spec.startsWith("content://")) {
             DocumentFile dir = DocumentFile.fromTreeUri(ctx, Uri.parse(spec));
             if (dir == null || !dir.canWrite()) throw new Exception("Dossier d'enregistrement inaccessible (clé USB débranchée ?)");
-            DocumentFile f = dir.createFile("video/mp2t", name.replaceAll("\\.ts$", ""));
+            String mime = mimeOf(name);
+            DocumentFile f = mime.equals("application/octet-stream") ? dir.createFile(mime, name) : dir.createFile(mime, name.replaceAll("\\.[A-Za-z0-9]{2,4}$", ""));
             if (f == null) throw new Exception("Impossible de créer le fichier");
             t.stream = ctx.getContentResolver().openOutputStream(f.getUri(), "w");
             t.uri = f.getUri().toString();
@@ -114,6 +120,27 @@ public final class RecStorage {
         }
         if (t.stream == null) throw new Exception("Impossible d'écrire le fichier");
         return t;
+    }
+
+    static String mimeOf(String name) {
+        String n = name.toLowerCase(Locale.ROOT);
+        if (n.endsWith(".ts")) return "video/mp2t";
+        if (n.endsWith(".mkv")) return "video/x-matroska";
+        if (n.endsWith(".mp4") || n.endsWith(".m4v")) return "video/mp4";
+        if (n.endsWith(".avi")) return "video/x-msvideo";
+        if (n.endsWith(".webm")) return "video/webm";
+        return "application/octet-stream";
+    }
+
+    /** Reopens an existing file to continue (append) or restart (truncate) a download. */
+    public static OutputStream reopen(Context ctx, String uri, boolean append) throws Exception {
+        if (uri.startsWith("smb://")) return Smb.openOut(ctx, uri, append);
+        if (uri.startsWith("content://")) {
+            OutputStream o = ctx.getContentResolver().openOutputStream(Uri.parse(uri), append ? "wa" : "wt");
+            if (o == null) throw new Exception("Impossible d'écrire le fichier");
+            return o;
+        }
+        return new FileOutputStream(new File(Uri.parse(uri).getPath()), append);
     }
 
     public static boolean delete(Context ctx, String uri) {

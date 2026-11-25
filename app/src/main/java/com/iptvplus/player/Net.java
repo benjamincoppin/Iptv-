@@ -19,7 +19,10 @@ public final class Net {
         public void close() { try { if (body != null) body.close(); } catch (Throwable ignored) { } if (conn != null) conn.disconnect(); }
     }
 
-    public static Response open(String url, int connectTimeout, int readTimeout) throws Exception {
+    public static Response open(String url, int connectTimeout, int readTimeout) throws Exception { return open(url, connectTimeout, readTimeout, null); }
+
+    /** range: e.g. "bytes=1000-" to resume a download, or null */
+    public static Response open(String url, int connectTimeout, int readTimeout, String range) throws Exception {
         String target = url;
         HttpURLConnection c = null;
         int code = 0;
@@ -30,7 +33,8 @@ public final class Net {
             c.setReadTimeout(readTimeout);
             c.setRequestProperty("User-Agent", UA);
             c.setRequestProperty("Accept", "*/*");
-            c.setRequestProperty("Accept-Encoding", "gzip");
+            if (range != null) c.setRequestProperty("Range", range);
+            else c.setRequestProperty("Accept-Encoding", "gzip");
             code = c.getResponseCode();
             String loc = c.getHeaderField("Location");
             if (code >= 300 && code < 400 && loc != null) {

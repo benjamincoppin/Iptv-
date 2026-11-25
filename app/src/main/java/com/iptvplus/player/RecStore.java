@@ -86,11 +86,18 @@ public final class RecStore {
         long now = System.currentTimeMillis();
         long before = marginBefore(ctx) * 60000L, after = marginAfter(ctx) * 60000L;
         JSONArray a = all(ctx);
+        JSONObject nextVod = null;
         for (int i = 0; i < a.length(); i++) {
             JSONObject o = a.optJSONObject(i);
             if (o == null) continue;
             String st = o.optString("status");
             String id = o.optString("id");
+            if ("vod".equals(o.optString("mode"))) {
+                // films / episodes: one download at a time, interrupted ones first, then in order of request
+                boolean waiting = "queued".equals(st) || ("recording".equals(st) && !RecordingService.isActive(id));
+                if (waiting && (nextVod == null || rank(o) < rank(nextVod))) nextVod = o;
+                continue;
+            }
             long start = o.optLong("start") - before, end = o.optLong("end") + after;
             if ("replay".equals(o.optString("mode")) && ("scheduled".equals(st) || ("recording".equals(st) && !RecordingService.isActive(id)))) {
                 // download of an aired programme from the provider's replay
@@ -110,6 +117,11 @@ public final class RecStore {
                 tryReplay(ctx, o, now);
             }
         }
+        if (nextVod != null && RecordingService.activeVod() == 0) RecordingService.start(ctx, nextVod.optString("id"));
+    }
+
+    private static long rank(JSONObject o) {
+        return ("recording".equals(o.optString("status")) ? 0 : 1L << 50) + o.optLong("created");
     }
 
     private static void markMissed(Context ctx, JSONObject o, long now) {

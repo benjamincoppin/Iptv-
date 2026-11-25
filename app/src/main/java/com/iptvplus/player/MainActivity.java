@@ -493,7 +493,7 @@ public class MainActivity extends Activity {
             for (int i = 0; i < a.length(); i++) {
                 JSONObject o = a.optJSONObject(i);
                 if (o != null && "done".equals(o.optString("status")) && o.optString("file").length() > 0) {
-                    try { o.put("exists", RecStorage.exists(MainActivity.this, o.optString("file"))); } catch (Exception ignored) { }
+                    try { o.put("exists", o.optString("file").startsWith("smb://") || RecStorage.exists(MainActivity.this, o.optString("file"))); } catch (Exception ignored) { }
                 }
                 if (o != null) { try { o.put("active", RecordingService.isActive(o.optString("id"))); } catch (Exception ignored) { } }
             }
@@ -548,6 +548,42 @@ public class MainActivity extends Activity {
         @JavascriptInterface public String recVolumes() { return RecStorage.volumes(MainActivity.this); }
 
         @JavascriptInterface public String recProgress() { return RecordingService.progressJson(); }
+
+        // ---------- films / episodes downloads ----------
+        /** Adds a download to the queue (or returns the existing one for the same film / episode). */
+        @JavascriptInterface public String dlAdd(String json) {
+            try {
+                JSONObject o = new JSONObject(json);
+                String key = o.optString("vodKey");
+                org.json.JSONArray a = RecStore.all(MainActivity.this);
+                for (int i = 0; i < a.length(); i++) {
+                    JSONObject x = a.optJSONObject(i);
+                    if (x != null && key.length() > 0 && key.equals(x.optString("vodKey")) && !"cancelled".equals(x.optString("status"))) {
+                        if ("failed".equals(x.optString("status")) || "paused".equals(x.optString("status"))) { RecStore.update(MainActivity.this, x.optString("id"), "status", "queued"); RecStore.reschedule(MainActivity.this); }
+                        return x.optString("id");
+                    }
+                }
+                o.put("id", "d" + Long.toString(System.currentTimeMillis(), 36) + Integer.toString((int) (Math.random() * 1000), 36));
+                o.put("mode", "vod");
+                o.put("status", "queued");
+                o.put("created", System.currentTimeMillis());
+                if (!o.has("start")) o.put("start", System.currentTimeMillis());
+                RecStore.put(MainActivity.this, o);
+                RecStore.reschedule(MainActivity.this);
+                return o.getString("id");
+            } catch (Exception e) { return ""; }
+        }
+
+        @JavascriptInterface public void dlPause(String id) {
+            RecStore.update(MainActivity.this, id, "status", "paused");
+            RecordingService.stop(MainActivity.this, id);
+        }
+
+        @JavascriptInterface public void dlResume(String id) {
+            RecStore.update(MainActivity.this, id, "status", "queued");
+            RecStore.update(MainActivity.this, id, "error", "");
+            RecStore.reschedule(MainActivity.this);
+        }
 
         @JavascriptInterface public String recPlayUrl(String id) {
             JSONObject o = RecStore.get(MainActivity.this, id);
