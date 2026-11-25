@@ -65,7 +65,7 @@
         '<label class="field"><span>Adresse du serveur</span><input class="f" id="lg-s" type="url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="http://exemple.com:8080" value="' + U.esc(a.server || '') + '"></label>' +
         '<label class="field"><span>Nom d\'utilisateur</span><input class="f" id="lg-u" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + U.esc(a.user || '') + '"></label>' +
         '<label class="field"><span>Mot de passe</span><input class="f" id="lg-p" type="password" autocomplete="off" data-submit="1" value=""></label>' +
-        '<label class="field"><span>Clé API TMDB <span class="muted">(facultatif, pour les images des épisodes)</span></span><input class="f" id="lg-t" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Clé gratuite sur themoviedb.org" value="' + U.esc(Settings.get('tmdbKey') || '') + '"></label>' +
+        '<label class="field"><span>Clé API TMDB <span class="muted">(facultatif, pour les images des épisodes)</span></span><input class="f" id="lg-t" type="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Clé gratuite sur themoviedb.org" value="' + U.esc(API.account ? TMDB.key() : '') + '"></label>' +
         '<button class="f btn primary" id="lg-go">Se connecter</button>' +
         '<div class="err" id="lg-e"></div>' +
         '<div class="hint">Astuce : tu peux aussi coller ton lien M3U complet (…/get.php?username=…&amp;password=…) dans le champ « Adresse du serveur ».</div>' +
@@ -83,7 +83,7 @@
       API.login(s.value, u.value, p.value).then(function () {
         U.store.set('lastAccount', { server: API.account.server, user: API.account.user });
         var tk = U.$('#lg-t', page).value.trim();
-        if (tk && tk !== (Settings.get('tmdbKey') || '')) TMDB.setKey(tk);
+        if (tk && tk !== TMDB.key()) TMDB.setKey(tk);
         U.toast('Connecté');
         App.start();
       }).catch(function (e) {
@@ -590,7 +590,7 @@
       row('aspectVod', 'Format d\'image · Films et séries', 'Original, 16:9, 4:3, étirer ou zoom', Aspect.labels[Aspect.get('vod')]) +
       row('tmdb', 'Clé API TMDB (images des épisodes)', TMDB.enabled() ? 'Ta clé personnelle est enregistrée' + (Sync.url() ? ', partagée avec tes autres appareils' : '') : 'Facultatif : clé gratuite sur themoviedb.org → Paramètres → API', TMDB.enabled() ? 'Configurée' : 'Non configurée') +
       row('autoNext', 'Épisode suivant automatique', 'Enchaîne les épisodes d\'une série', s.autoNext ? 'Oui' : 'Non') +
-      row('sync', 'Synchronisation entre appareils', Sync.url() ? ('« Reprendre la lecture » partagé · ' + (U.store.get('syncLast', 0) ? 'dernière synchro ' + U.hm(U.store.get('syncLast', 0)) : 'jamais synchronisé')) : 'Adresse du script sync.php non configurée', Sync.url() ? 'Activée' : 'Désactivée') +
+      row('sync', 'Synchronisation entre appareils', Sync.url() ? ('« Reprendre la lecture » partagé · ' + (AS.get('syncLast', 0) ? 'dernière synchro ' + U.hm(AS.get('syncLast', 0)) : 'jamais synchronisé')) : 'Adresse du script sync.php non configurée', Sync.url() ? 'Activée' : 'Désactivée') +
       row('diag', 'Diagnostic', 'Journal technique à m\'envoyer en cas de problème', '') +
       row('reload', 'Recharger les listes', 'Récupère les nouvelles chaînes, films et séries', '') +
       row('clearHist', 'Effacer l\'historique', 'Vide « Reprendre la lecture » et les chaînes récentes', '') +
@@ -606,7 +606,7 @@
         else if (k === 'player') Modal.choose('Lecteur vidéo', [{ label: 'Intégré', value: 'internal' }, { label: 'Externe', value: 'external' }].map(function (o) { o.selected = Settings.get('player') === o.value; return o; }), function (v) { Settings.set('player', v); App.refresh(); });
         else if (k === 'aspectLive') Aspect.choose('live', function () { App.refresh(); });
         else if (k === 'aspectVod') Aspect.choose('vod', function () { App.refresh(); });
-        else if (k === 'tmdb') Modal.prompt('Clé API TMDB', 'Colle ta clé API TMDB personnelle (gratuite sur themoviedb.org → Paramètres → API). Laisse vide pour la retirer.', Settings.get('tmdbKey') || '', function (val) {
+        else if (k === 'tmdb') Modal.prompt('Clé API TMDB', 'Colle ta clé API TMDB personnelle (gratuite sur themoviedb.org → Paramètres → API). Laisse vide pour la retirer.', TMDB.key(), function (val) {
           TMDB.setKey(val);
           if (!TMDB.enabled()) { U.toast('Clé TMDB retirée'); App.refresh(); return; }
           TMDB.check().then(function (ok) { U.toast(ok ? 'Clé TMDB valide' : 'Clé TMDB refusée, vérifie-la'); });

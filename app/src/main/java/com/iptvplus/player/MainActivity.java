@@ -385,6 +385,32 @@ public class MainActivity extends Activity {
             });
         }
 
+        @JavascriptInterface public String subTracks() { return player.subTracks(); }
+
+        @JavascriptInterface public void selectSub(final int id) {
+            ui.post(new Runnable() { @Override public void run() { player.selectSub(id); } });
+        }
+
+        @JavascriptInterface public void setSubtitleStyle(final String size, final String color) {
+            ui.post(new Runnable() { @Override public void run() { player.setSubtitleStyle(size, color); } });
+        }
+
+        /** Opens a web page / YouTube video in the matching app */
+        @JavascriptInterface public boolean openUrl(String url) {
+            try {
+                Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(i);
+                return true;
+            } catch (Throwable t) { return false; }
+        }
+
+        @JavascriptInterface public void installUpdate(final String url) { Updater.install(MainActivity.this, url, new Updater.Progress() {
+            @Override public void on(String state, int pct, String msg) {
+                js("window.App&&App.updateProgress&&App.updateProgress(" + JSONObject.quote(state) + "," + pct + "," + JSONObject.quote(msg == null ? "" : msg) + ")");
+            }
+        }); }
+
         /** auto | 16:9 | 4:3 | fill (étirer) | zoom (remplir en rognant) */
         @JavascriptInterface public void setAspect(final String mode) {
             ui.post(new Runnable() { @Override public void run() { player.setAspect(mode); } });

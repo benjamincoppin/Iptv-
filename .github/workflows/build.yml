@@ -2,7 +2,7 @@ name: Compiler l'APK IPTV+
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, dev ]
   workflow_dispatch:
 
 permissions:
@@ -56,7 +56,7 @@ jobs:
 
       # Publish a release only when the APK is signed with the real key (updates install over the previous version)
       - name: Publication (Releases)
-        if: env.KEYSTORE_PATH != ''
+        if: env.KEYSTORE_PATH != '' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VNAME }}

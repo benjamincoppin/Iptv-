@@ -37,7 +37,8 @@
     if (!S.enabled() || S.busy) return Promise.resolve(false);
     S.busy = true;
     clearTimeout(S.timer);
-    var before = JSON.stringify(Hist.all());
+    var before = JSON.stringify(Store.all());
+    var keyBefore = TMDB.key();
     return new Promise(function (resolve) {
       var x = new XMLHttpRequest();
       var url = S.url() + (S.url().indexOf('?') >= 0 ? '&' : '?') + 'key=' + key();
@@ -49,22 +50,18 @@
         if (x.status < 200 || x.status >= 300) { S.error = 'HTTP ' + x.status; return resolve(false); }
         try {
           var r = JSON.parse(x.responseText);
-          var merged = merge(Hist.all(), (r && r.items) || {});
-          U.store.set('hist', merged);
-          // Settings shared between the user's devices (TMDB key typed once on the phone, used on the TV)
-          var cfg = merged['cfg:tmdbKey'];
-          if (cfg && typeof cfg.v === 'string' && cfg.v !== (Settings.get('tmdbKey') || '')) {
-            Settings.set('tmdbKey', cfg.v); U.store.del('tmdbIds'); TMDB.mem = {};
-          }
+          var merged = merge(Store.all(), (r && r.items) || {});
+          Store.set(merged);
+          if (TMDB.key() !== keyBefore) { AS.del('tmdbIds'); TMDB.mem = {}; }
           S.last = Date.now(); S.error = null;
-          U.store.set('syncLast', S.last);
+          AS.set('syncLast', S.last);
           var changed = JSON.stringify(merged) !== before;
           if (changed && S.onChange) S.onChange();
           resolve(changed);
         } catch (e) { S.error = 'réponse invalide'; resolve(false); }
       };
       x.onerror = x.ontimeout = function () { S.busy = false; S.error = 'serveur injoignable'; resolve(false); };
-      x.send(JSON.stringify({ items: Hist.all() }));
+      x.send(JSON.stringify({ items: Store.all() }));
     });
   };
 

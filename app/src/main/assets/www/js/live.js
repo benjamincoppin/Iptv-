@@ -38,11 +38,11 @@
       all.forEach(function (s) { (byCat[s.category_id] = byCat[s.category_id] || []).push(s); });
       cats = [{ id: '__fav', name: 'Favoris' }, { id: '__recent', name: 'Récents' }, { id: '__all', name: 'Toutes les chaînes' }]
         .concat(r[0].filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; }));
-      var startId = o.id || U.store.get('lastLive', null);
+      var startId = o.id || Hist.lastLive();
       var start = startId && all.find(function (s) { return String(s.stream_id) === String(startId); });
       if (!start) start = all[0];
       if (!start) { buildUi(); msg('Aucune chaîne disponible sur ce compte.'); return; }
-      catId = o.cat || U.store.get('lastLiveCat', null) || start.category_id;
+      catId = o.cat || AS.get('lastLiveCat', null) || start.category_id;
       if (!cats.some(function (c) { return String(c.id) === String(catId); })) catId = start.category_id;
       buildUi();
       selectCat(catId, false);
@@ -90,7 +90,7 @@
 
   function selectCat(id, focus) {
     catId = id;
-    U.store.set('lastLiveCat', id);
+    AS.set('lastLiveCat', id);
     list = listFor(id);
     U.$$('.cat', el).forEach(function (b) { b.classList.toggle('active', String(b.dataset.c) === String(id)); });
     var c = cats.find(function (x) { return String(x.id) === String(id); });

@@ -64,18 +64,62 @@ public class NativePlayer {
         layout = new VLCVideoLayout(ctx);
         box.addView(layout, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
+        createVlc();
+        attachViews();
+    }
+
+    // Subtitle style needs a new LibVLC instance: rebuilt before the next playback when it changes
+    private String subSize = "normal", subColor = "white";
+    private volatile boolean styleDirty = false;
+
+    private void createVlc() {
         ArrayList<String> opts = new ArrayList<String>();
         opts.add("--http-reconnect");
         opts.add("--audio-time-stretch");
         opts.add("--no-stats");
         opts.add("--no-sub-autodetect-file");
         opts.add("--avcodec-skiploopfilter=1");
+        int rel = "small".equals(subSize) ? 20 : "large".equals(subSize) ? 12 : "huge".equals(subSize) ? 9 : 16;
+        opts.add("--freetype-rel-fontsize=" + rel);
+        int color = "yellow".equals(subColor) ? 0xFFFF00 : 0xFFFFFF;
+        opts.add("--freetype-color=" + color);
+        opts.add("--freetype-outline-thickness=4");
+        if ("box".equals(subColor)) {
+            opts.add("--freetype-background-opacity=170");
+            opts.add("--freetype-background-color=0");
+        }
         vlc = new LibVLC(this.ctx, opts);
         mp = new MediaPlayer(vlc);
         mp.setEventListener(new MediaPlayer.EventListener() {
             @Override public void onEvent(MediaPlayer.Event ev) { onVlcEvent(ev); }
         });
+    }
+
+    /** size: small | normal | large | huge ; color: white | yellow | box (white on dark box) */
+    public void setSubtitleStyle(String size, String color) {
+        if (size == null) size = "normal";
+        if (color == null) color = "white";
+        if (size.equals(subSize) && color.equals(subColor)) return;
+        subSize = size; subColor = color;
+        styleDirty = true;
+    }
+
+    // Rebuild LibVLC with the new subtitle style (UI thread, nothing playing)
+    private void rebuildIfNeeded() {
+        if (!styleDirty || released) return;
+        styleDirty = false;
+        detachViews();
+        final MediaPlayer oldMp = mp;
+        final LibVLC oldVlc = vlc;
+        createVlc();
         attachViews();
+        worker.post(new Runnable() {
+            @Override public void run() {
+                try { oldMp.setEventListener(null); oldMp.stop(); } catch (Throwable ignored) { }
+                try { oldMp.release(); } catch (Throwable ignored) { }
+                try { oldVlc.release(); } catch (Throwable ignored) { }
+            }
+        });
     }
 
     // ---------- events (delivered on the main thread by LibVLC) ----------
@@ -136,9 +180,10 @@ public class NativePlayer {
 
     // ---------- controls (all on the worker thread) ----------
     public void play(final String url, final int startMs, final Map<String, String> headers) {
+        rebuildIfNeeded();
         final int gen = ++generation;
         prepared = false; buffering = true; playing = false;
-        time = 0; length = 0; tracksJson = "[]";
+        time = 0; length = 0; tracksJson = "[]"; subsJson = "[]";
         box.setVisibility(View.VISIBLE);
         worker.removeCallbacksAndMessages(null);
         worker.post(new Runnable() {
@@ -214,7 +259,7 @@ public class NativePlayer {
 
     private void attachViews() {
         if (released || attached) return;
-        try { mp.attachViews(layout, null, false, false); attached = true; applyAspectNow(); }
+        try { mp.attachViews(layout, null, true, false); attached = true; applyAspectNow(); }
         catch (Throwable t) { Diag.log("attachViews: " + t); }
     }
 
@@ -284,11 +329,35 @@ public class NativePlayer {
                     }
                 } catch (Throwable ignored) { }
                 tracksJson = arr.toString();
+                JSONArray subs = new JSONArray();
+                try {
+                    MediaPlayer.TrackDescription[] t = mp.getSpuTracks();
+                    int cur = mp.getSpuTrack();
+                    if (t != null) {
+                        for (MediaPlayer.TrackDescription d : t) {
+                            JSONObject o = new JSONObject();
+                            o.put("index", d.id);
+                            o.put("lang", d.id < 0 ? "Désactivés" : d.name);
+                            o.put("selected", d.id == cur);
+                            subs.put(o);
+                        }
+                    }
+                } catch (Throwable ignored) { }
+                subsJson = subs.toString();
             }
         });
     }
 
     public String audioTracks() { return tracksJson; }
+
+    private volatile String subsJson = "[]";
+    public String subTracks() { return subsJson; }
+
+    public void selectSub(final int id) {
+        final int gen = generation;
+        worker.post(new Runnable() { @Override public void run() { try { if (!released) mp.setSpuTrack(id); } catch (Throwable ignored) { } } });
+        refreshTracks(gen);
+    }
 
     public void selectAudio(final int id) {
         final int gen = generation;

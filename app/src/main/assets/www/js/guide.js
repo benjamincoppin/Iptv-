@@ -16,7 +16,7 @@
       all.forEach(function (s) { (byCat[s.category_id] = byCat[s.category_id] || []).push(s); });
       cats = r[0].filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; });
       if (Fav.list('live').length) cats.unshift({ id: '__fav', name: 'Favoris' });
-      var saved = U.store.get('guideCat', null) || U.store.get('lastLiveCat', null);
+      var saved = AS.get('guideCat', null) || AS.get('lastLiveCat', null);
       catId = cats.some(function (c) { return String(c.id) === String(saved); }) ? saved : (cats[0] && cats[0].id);
       build();
     }).catch(function (e) {
@@ -56,7 +56,7 @@
 
   function selectCat(id, focus) {
     catId = id;
-    U.store.set('guideCat', id);
+    AS.set('guideCat', id);
     U.$$('.gd .chip', root).forEach(function (b) { b.classList.toggle('active', String(b.dataset.c) === String(id)); });
     if (id === '__fav') {
       rows = Fav.list('live').map(function (f) { return all.find(function (s) { return String(s.stream_id) === String(f.id); }); }).filter(Boolean);

@@ -67,7 +67,7 @@
   }
 
   var API = {
-    account: U.store.get('account', null),
+    account: Accounts.current(),
     info: null,          // user_info + server_info from login
     cache: {},
     epgCache: {},
@@ -87,8 +87,8 @@
       var st = String(r.user_info.status || '').toLowerCase();
       if (st && st !== 'active') throw new Error('Abonnement ' + (st === 'expired' ? 'expiré' : 'inactif (' + st + ')'));
       API.info = r;
-      U.store.set('account', acc);
-      API.cache = {};
+      API.account = Accounts.upsert(acc);
+      API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
       return r;
     }).catch(function (e) { API.account = prev; throw e; });
   };
@@ -97,9 +97,15 @@
     return getJson(base()).then(function (r) { if (r && r.user_info) API.info = r; return r; });
   };
 
+  // Remove the current account; switch to another saved one if any
   API.logout = function () {
-    API.account = null; API.info = null; API.cache = {}; API.epgCache = {};
-    U.store.del('account');
+    if (API.account) Accounts.remove(API.account.id);
+    API.account = Accounts.current(); API.info = null; API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
+  };
+  API.switchAccount = function (id) {
+    Accounts.use(id);
+    API.account = Accounts.current(); API.info = null; API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
+    if (window.TMDB) TMDB.mem = {};
   };
 
   function cached(key, action, extra) {
@@ -213,15 +219,11 @@
   var TMDB = { mem: {} };
   // Each user brings their own TMDB key (Paramètres or login screen); it is shared between
   // the user's own devices through the sync (stored under their own Xtream account entry).
-  TMDB.key = function () { return (Settings.get('tmdbKey') || '').trim(); };
+  TMDB.key = function () { return String(Cfg.get('tmdbKey', '') || '').trim(); };
   TMDB.setKey = function (k) {
     k = String(k || '').replace(/[^A-Za-z0-9._-]/g, '');
-    Settings.set('tmdbKey', k);
-    U.store.del('tmdbIds'); TMDB.mem = {};
-    var all = U.store.get('hist', {});
-    all['cfg:tmdbKey'] = { type: 'cfg', v: k, ts: Date.now() };
-    U.store.set('hist', all);
-    if (window.Sync) Sync.soon();
+    AS.del('tmdbIds'); TMDB.mem = {};
+    Cfg.set('tmdbKey', k);
   };
   TMDB.check = function () { return TMDB.get('/configuration').then(function () { return true; }, function () { return false; }); };
   TMDB.enabled = function () { return !!TMDB.key(); };
@@ -252,7 +254,7 @@
   TMDB.tvId = function (sid, info, base, name) {
     var direct = info.tmdb || info.tmdb_id || base.tmdb || base.tmdb_id;
     if (direct && /^\d+$/.test(String(direct))) return Promise.resolve(String(direct));
-    var cache = U.store.get('tmdbIds', {});
+    var cache = AS.get('tmdbIds', {});
     if (cache[sid]) return Promise.resolve(cache[sid] === 'none' ? null : cache[sid]);
     var year = U.year(info.releaseDate || info.release_date || base.releaseDate);
     var clean = U.noYear(name).replace(/\s*[\(\[][^\)\]]*[\)\]]\s*/g, ' ').replace(/\b(VOSTFR|VF|FR|MULTI|4K|HD|FHD|UHD)\b/gi, '').trim();
@@ -262,7 +264,7 @@
       return TMDB.get('/search/tv', p).then(function (r) { return r && r.results && r.results[0] ? String(r.results[0].id) : null; });
     }
     return search(true).then(function (id) { return id || search(false); }).then(function (id) {
-      cache = U.store.get('tmdbIds', {}); cache[sid] = id || 'none'; U.store.set('tmdbIds', cache);
+      cache = AS.get('tmdbIds', {}); cache[sid] = id || 'none'; AS.set('tmdbIds', cache);
       return id;
     });
   };
@@ -278,90 +280,11 @@
   window.TMDB = TMDB;
 
   // ---------- settings ----------
-  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', tmdbKey: '', syncUrl: '' };
+  var defaults = { liveFormat: 'auto', player: 'internal', autoNext: true, startLive: false, aspectLive: 'auto', aspectVod: 'auto', syncUrl: '', subSize: 'normal', subColor: 'white', subAuto: true, introSkip: 85, autoUpdate: true };
   window.Settings = {
     all: function () { var s = U.store.get('settings', {}); var o = {}; for (var k in defaults) o[k] = (k in s) ? s[k] : defaults[k]; return o; },
     get: function (k) { return this.all()[k]; },
     set: function (k, v) { var s = U.store.get('settings', {}); s[k] = v; U.store.set('settings', s); }
   };
 
-  // ---------- favorites ----------
-  // { live: [{id,name,icon,num}], movie: [...], series: [...] }
-  window.Fav = {
-    all: function () { return U.store.get('fav', { live: [], movie: [], series: [] }); },
-    list: function (t) { return this.all()[t] || []; },
-    has: function (t, id) { return this.list(t).some(function (x) { return String(x.id) === String(id); }); },
-    toggle: function (t, item) {
-      var all = this.all(), l = all[t] || [], id = String(item.id);
-      var i = l.findIndex(function (x) { return String(x.id) === id; });
-      if (i >= 0) l.splice(i, 1); else l.unshift(item);
-      all[t] = l; U.store.set('fav', all);
-      return i < 0;
-    }
-  };
-
-  // ---------- watch history / resume ----------
-  // key = type:id ; {type, id, name, img, pos, dur, ts, ext, seriesId, seriesName, season, ep, cover}
-  window.Hist = {
-    all: function () { return U.store.get('hist', {}); },
-    get: function (type, id) { return this.all()[type + ':' + id] || null; },
-    save: function (item) {
-      var all = this.all();
-      item.ts = item.watched = Date.now();
-      delete item.hidden;
-      all[item.type + ':' + item.id] = item;
-      var keys = Object.keys(all);
-      if (keys.length > 300) {
-        keys.sort(function (a, b) { return all[a].ts - all[b].ts; }).slice(0, keys.length - 300).forEach(function (k) { delete all[k]; });
-      }
-      U.store.set('hist', all);
-      if (window.Sync) Sync.later();
-    },
-    // Hide from "Reprendre la lecture" (kept as a dated marker so other devices hide it too)
-    dismiss: function (h) {
-      var all = this.all(), now = Date.now();
-      Object.keys(all).forEach(function (k) {
-        var x = all[k];
-        var same = h.type === 'episode' ? (x.type === 'episode' && String(x.seriesId) === String(h.seriesId)) : (x.type === h.type && String(x.id) === String(h.id));
-        if (same) { x.hidden = true; x.ts = now; }
-      });
-      U.store.set('hist', all);
-      if (window.Sync) Sync.soon();
-    },
-    remove: function (type, id) { var all = this.all(); var x = all[type + ':' + id]; if (x) { x.hidden = true; x.ts = Date.now(); } U.store.set('hist', all); },
-    clear: function () {
-      var all = this.all(), now = Date.now();
-      Object.keys(all).forEach(function (k) { if (all[k].type !== 'cfg') { all[k].hidden = true; all[k].ts = now; } });
-      U.store.set('hist', all); U.store.set('recentLive', []);
-      if (window.Sync) Sync.soon();
-    },
-    // "Reprendre la lecture": movies & one entry per series, unfinished
-    resumeList: function () {
-      var all = this.all(), seen = {}, out = [];
-      Object.keys(all).map(function (k) { return all[k]; })
-        .filter(function (h) { return !h.hidden && h.type !== 'live' && h.dur > 0 && h.pos > 30000 && h.pos < h.dur * 0.94; })
-        .sort(function (a, b) { return b.ts - a.ts; })
-        .forEach(function (h) {
-          var key = h.type === 'episode' ? 's' + h.seriesId : 'm' + h.id;
-          if (seen[key]) return;
-          seen[key] = 1; out.push(h);
-        });
-      return out.slice(0, 20);
-    },
-    lastEpisode: function (seriesId) {
-      var all = this.all(), best = null;
-      Object.keys(all).forEach(function (k) {
-        var h = all[k];
-        if (h.type === 'episode' && String(h.seriesId) === String(seriesId) && h.dur && (!best || (h.watched || h.ts) > (best.watched || best.ts))) best = h;
-      });
-      return best;
-    },
-    pushLive: function (ch) {
-      var l = U.store.get('recentLive', []).filter(function (x) { return String(x.id) !== String(ch.id); });
-      l.unshift({ id: ch.id, name: ch.name, icon: ch.icon, num: ch.num, cat: ch.cat });
-      U.store.set('recentLive', l.slice(0, 20));
-      U.store.set('lastLive', ch.id);
-    },
-    recentLive: function () { return U.store.get('recentLive', []); }
-  };
 })();
