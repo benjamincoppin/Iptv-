@@ -92,6 +92,12 @@ public final class RecStore {
             String st = o.optString("status");
             String id = o.optString("id");
             long start = o.optLong("start") - before, end = o.optLong("end") + after;
+            if ("replay".equals(o.optString("mode")) && ("scheduled".equals(st) || ("recording".equals(st) && !RecordingService.isActive(id)))) {
+                // download of an aired programme from the provider's replay
+                long ready = o.optLong("end") + 3 * 60000L;
+                if (ready > now) arm(ctx, id, ready); else RecordingService.start(ctx, id);
+                continue;
+            }
             if ("scheduled".equals(st)) {
                 if (start > now) arm(ctx, id, start);
                 else if (end > now) RecordingService.start(ctx, id);

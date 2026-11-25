@@ -176,6 +176,7 @@
   }
   // Redraw only the "Reprendre la lecture" row (after a removal or a sync from another device)
   V.updateResume = function (page) {
+    if (App.syncWatchNext) App.syncWatchNext();
     var sec = U.$('#resume-sec', page);
     if (!sec || !sec.isConnected) return;
     var list = Hist.resumeList();

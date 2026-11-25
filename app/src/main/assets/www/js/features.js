@@ -207,7 +207,15 @@
             return '<button class="f ep" data-i="' + past.indexOf(p) + '" data-key="rp' + p.start + '"><div class="rtime">' + U.hm(p.start) + '<small>' + U.minutesLabel((p.end - p.start) / 60000) + '</small></div>' +
               '<div style="min-width:0"><div class="et">' + U.esc(p.title || 'Programme') + '</div><div class="ed">' + U.esc(p.desc || '') + '</div></div></button>';
           }).join('') : '<div class="empty">Aucun programme disponible en replay pour ce jour.</div>';
-          U.$$('[data-i]', box).forEach(function (b) { b.addEventListener('click', function () { V.playReplay(s, past[+b.dataset.i]); }); });
+          U.$$('[data-i]', box).forEach(function (b) {
+            b.addEventListener('click', function () {
+              var p = past[+b.dataset.i];
+              if (!window.Recordings || !Recordings.supported()) return V.playReplay(s, p);
+              Modal.choose(p.title || 'Replay', [{ label: '▶ Regarder', value: 'play' }, { label: '⬇ Télécharger sur la clé USB', value: 'dl' }], function (v) {
+                if (v === 'play') V.playReplay(s, p); else Recordings.downloadReplay(s, p);
+              });
+            });
+          });
         }
         U.$$('[data-day]', page).forEach(function (b) { b.addEventListener('click', function () { showDay(b.dataset.day); }); });
         if (day) showDay(day); else U.$('#rp', page).innerHTML = '<div class="empty">Pas encore de programme enregistré pour cette chaîne.</div>';
@@ -359,6 +367,9 @@
       row('tmdb', 'Clé API TMDB', TMDB.enabled() ? 'Images, bandes-annonces et recommandations activées' : 'Facultatif : clé gratuite sur themoviedb.org → Paramètres → API', TMDB.enabled() ? 'Configurée' : 'Non configurée') +
       row('reload', 'Recharger les listes', 'Récupère les nouvelles chaînes, films et séries (automatique toutes les 12 h)', '') +
       row('clearHist', 'Effacer l\'historique de ce profil', 'Vide « Reprendre la lecture » et les chaînes récentes', '') +
+      (window.Recordings && Recordings.supported() ? head('Enregistrements') +
+        row('recordings', 'Mes enregistrements', 'Programmes enregistrés sur la clé USB ou le disque dur', '') +
+        row('recsettings', 'Réglages des enregistrements', 'Emplacement, marges avant/après, plan B replay', '') : '') +
       head('Appareil') +
       row('sync', 'Synchronisation entre appareils', Sync.url() ? ('Profils, favoris, reprise et réglages partagés · ' + (AS.get('syncLast', 0) ? 'dernière synchro ' + U.hm(AS.get('syncLast', 0)) : 'jamais synchronisé')) : 'Adresse du serveur non configurée', Sync.url() ? 'Activée' : 'Désactivée') +
       row('update', 'Mises à jour', 'Recherche automatique des nouvelles versions', s.autoUpdate ? 'Automatiques' : 'Manuelles') +
@@ -389,7 +400,9 @@
           TMDB.check().then(function (ok) { U.toast(ok ? 'Clé TMDB valide' : 'Clé TMDB refusée, vérifie-la'); });
           App.refresh();
         });
-        else if (k === 'reload') { API.reloadCatalog(); U.toast('Listes rechargées'); }
+        else if (k === 'reload') { U.toast('Rechargement des listes…'); API.reloadCatalog().then(function () { U.toast('Listes rechargées'); }); }
+        else if (k === 'recordings') App.go('recordings');
+        else if (k === 'recsettings') Recordings.settings();
         else if (k === 'clearHist') Modal.choose('Effacer l\'historique de « ' + prof.name + ' » ?', [{ label: 'Oui, effacer', value: 1 }, { label: 'Annuler', value: 0 }], function (v) { if (v) { Hist.clear(); U.toast('Historique effacé'); } });
         else if (k === 'sync') Modal.choose('Synchronisation', [
           { label: 'Synchroniser maintenant', value: 'now' },

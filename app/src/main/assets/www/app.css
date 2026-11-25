@@ -392,3 +392,40 @@ body.kbd .skipbtn.f.focused{box-shadow:0 0 0 3px var(--accent);transform:scale(1
 /* page containers */
 .view{min-height:100%}
 .view-guide,.view-login,.view-profiles{height:100%}
+
+/* ---------- pause / différé du direct ---------- */
+.lv .tsctl{display:flex;flex-wrap:wrap;gap:6px;padding:0 0 8px}
+.lv .tsctl:empty{display:none}
+.lv .tsb{padding:6px 10px;border-radius:14px;background:#26262b;color:var(--soft);font-size:12px;font-weight:600}
+.lv .tsb.live{color:#fff;background:var(--accent)}
+.lv .tsb.recon{color:#fff;background:#c62828}
+body.kbd .lv .tsb.f.focused{background:var(--text);color:#111;box-shadow:none}
+.lv .tsbadge{position:absolute;top:22px;right:26px;background:rgba(10,10,10,.85);color:#fff;padding:10px 16px;border-radius:12px;font-weight:700;font-size:15px;z-index:3;text-align:right}
+.lv .tsbadge small{display:block;font-weight:400;font-size:11px;color:var(--muted);margin-top:3px}
+.lv .infobar .rec{font-size:12px;font-weight:800;color:#ff4d4d;animation:recblink 1.6s infinite}
+@keyframes recblink{50%{opacity:.35}}
+
+/* ---------- guide : programmes enregistrés ---------- */
+.gd .pg.rec .pt::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff4d4d;margin-right:6px;vertical-align:1px}
+
+/* ---------- enregistrements ---------- */
+.icon-btn .dotfill{fill:#ff4d4d;stroke:none}
+.recs{max-width:900px;padding:10px var(--pad) 40px}
+.recs .rhead{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:14px;margin-bottom:10px}
+.recs h1{font-size:28px}
+.recs .rhead p{margin:6px 0 0;font-size:13px}
+.recs .rlist{display:flex;flex-direction:column;gap:8px}
+.recs .rrow{display:flex;align-items:center;gap:14px;width:100%;text-align:left;padding:12px 14px;border-radius:10px;background:var(--card)}
+.recs .rrow .lg{flex:none;width:64px;height:40px;display:flex;align-items:center;justify-content:center;background:#1c1c20;border-radius:6px;overflow:hidden}
+.recs .rrow .lg img{max-width:100%;max-height:100%;object-fit:contain}
+.recs .rrow .tx{flex:1;min-width:0}
+.recs .rrow .t{display:block;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.recs .rrow .d{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.recs .rrow .s{display:block;font-size:12px;margin-top:3px;color:var(--soft)}
+.recs .rrow.st-recording .s{color:#ff4d4d;font-weight:700}
+.recs .rrow.st-failed .s,.recs .rrow.st-missed .s{color:#ffb74d}
+.recs .rrow.st-done .s{color:#7bd88f}
+.recs .rnote{font-size:12px;line-height:1.5;margin-top:24px}
+body.kbd .recs .rrow.f.focused{box-shadow:0 0 0 3px var(--text);background:var(--card2)}
+@media (max-width:720px){.lv .tsbadge{top:12px;right:12px;font-size:13px}.recs .rrow .lg{width:48px;height:32px}}
+.recs .sh{margin:22px 0 10px}

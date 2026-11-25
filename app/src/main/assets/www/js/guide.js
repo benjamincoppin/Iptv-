@@ -140,6 +140,7 @@
         box._progs = progs;
       }
       bindRow(box);
+      if (window.Recordings && Recordings.supported()) U.$$('.pg[data-p]', box).forEach(function (b) { var p = progs[+b.dataset.p]; if (Recordings.findProg(id, p.start)) b.classList.add('rec'); });
       if (hadFocus) Nav.focus(U.$('.pg.now', box) || U.$('.pg', box), { noScroll: true });
     });
   }
@@ -169,22 +170,54 @@
     U.$('.badge-live', head).style.display = live ? '' : 'none';
   }
 
+  function chanOf(id) { return all.find(function (x) { return String(x.stream_id) === String(id); }); }
+  function withStartStr(ch, p) {
+    // the short EPG has no server-local start string: the full EPG gives it for replay URLs
+    return API.fullEpg(ch.stream_id).then(function (full) {
+      return full.filter(function (x) { return Math.abs(x.start - p.start) < 60000; })[0] || p;
+    }).catch(function () { return p; });
+  }
+
   function openProg(b) {
-    var p = progOf(b);
-    if (p && b.classList.contains('replay')) {
-      var ch = all.find(function (x) { return String(x.stream_id) === String(b.dataset.id); });
-      // short EPG has no server-local start string: fetch the full EPG to get it
-      API.fullEpg(ch.stream_id).then(function (full) {
-        var m = full.filter(function (x) { return Math.abs(x.start - p.start) < 60000; })[0] || p;
-        Views.playReplay(ch, m);
-      }).catch(function () { Views.playReplay(ch, p); });
-      return;
-    }
-    if (p && p.end <= Date.now()) { U.toast('Programme terminé (pas de replay sur cette chaîne). Lancement du direct…'); }
-    if (p && p.start > Date.now()) {
-      U.toast('« ' + p.title + ' » commence à ' + U.hm(p.start) + '. Lancement de la chaîne…');
-    }
-    App.go('live', { id: b.dataset.id, cat: catId === '__fav' ? '__fav' : catId });
+    var p = progOf(b), ch = chanOf(b.dataset.id), now = Date.now();
+    var goLive = function () { App.go('live', { id: b.dataset.id, cat: catId === '__fav' ? '__fav' : catId }); };
+    if (!p || !ch) return goLive();
+    var canRec = window.Recordings && Recordings.supported();
+    var isNow = p.start <= now && p.end > now, isPast = p.end <= now;
+    var canReplay = isPast && API.hasArchive(ch) && p.start >= now - (+ch.tv_archive_duration) * 86400000;
+    var rec = canRec && Recordings.findProg(ch.stream_id, p.start);
+    var opts = [];
+    if (isNow) opts.push({ label: 'Regarder en direct', value: 'live' });
+    if (isNow && API.hasArchive(ch)) opts.push({ label: '⏮ Regarder depuis le début', value: 'restart' });
+    if (canReplay) opts.push({ label: '▶ Regarder le replay', value: 'replay' });
+    if (canRec && rec) opts.push({ label: rec.status === 'recording' ? '■ Arrêter l\'enregistrement' : '✕ Annuler l\'enregistrement programmé', value: 'unrec' });
+    else if (canRec && !isPast) opts.push({ label: isNow ? '● Enregistrer (jusqu\'à ' + U.hm(p.end) + ')' : '● Programmer l\'enregistrement', value: 'rec' });
+    if (canRec && canReplay) opts.push({ label: '⬇ Télécharger le replay sur la clé USB', value: 'dl' });
+    if (!isNow) opts.push({ label: 'Regarder la chaîne en direct', value: 'live' });
+    if (canRec && !isNow && !isPast) opts.push({ label: 'Mes enregistrements', value: 'list' });
+    if (opts.length === 1) return goLive();
+    Modal.choose(p.title + ' · ' + U.hm(p.start) + ' – ' + U.hm(p.end), opts, function (v) {
+      if (v === 'live') goLive();
+      else if (v === 'restart') { App.go('live', { id: ch.stream_id, cat: catId === '__fav' ? '__fav' : catId, restart: true }); }
+      else if (v === 'replay') withStartStr(ch, p).then(function (m) { Views.playReplay(ch, m); });
+      else if (v === 'dl') withStartStr(ch, p).then(function (m) { Recordings.downloadReplay(ch, m); });
+      else if (v === 'rec') { Recordings.schedule(ch, p); setTimeout(markRecs, 600); }
+      else if (v === 'unrec') { Recordings.stop(rec.id); if (rec.status !== 'recording') Native.recDelete(rec.id, false); U.toast('Enregistrement annulé'); setTimeout(markRecs, 600); }
+      else if (v === 'list') App.go('recordings');
+    });
+  }
+
+  // Red dot on the programmes that will be / are being recorded
+  function markRecs() {
+    if (!root || !root.isConnected || !window.Recordings || !Recordings.supported()) return;
+    U.$$('.progs', root).forEach(function (box) {
+      if (!box._progs) return;
+      var id = box.closest('.row').dataset.id;
+      U.$$('.pg[data-p]', box).forEach(function (b) {
+        var p = box._progs[+b.dataset.p];
+        b.classList.toggle('rec', !!(p && Recordings.findProg(id, p.start)));
+      });
+    });
   }
 
   function tick() {

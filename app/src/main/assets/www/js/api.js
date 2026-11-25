@@ -88,7 +88,7 @@
       if (st && st !== 'active') throw new Error('Abonnement ' + (st === 'expired' ? 'expiré' : 'inactif (' + st + ')'));
       API.info = r;
       API.account = Accounts.upsert(acc);
-      API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
+      API.cache = {}; API.epgCache = {}; API.loadedAt = 0; API.xmltv = null; API.lists = {}; guideLoading = null;
       return r;
     }).catch(function (e) { API.account = prev; throw e; });
   };
@@ -99,40 +99,143 @@
 
   // Remove the current account; switch to another saved one if any
   API.logout = function () {
-    if (API.account) Accounts.remove(API.account.id);
-    API.account = Accounts.current(); API.info = null; API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
+    if (API.account) { API.forgetDisk(API.account); Accounts.remove(API.account.id); }
+    API.account = Accounts.current(); API.info = null; API.cache = {}; API.epgCache = {}; API.loadedAt = 0; API.xmltv = null; API.lists = {}; guideLoading = null;
   };
   API.switchAccount = function (id) {
     Accounts.use(id);
-    API.account = Accounts.current(); API.info = null; API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
+    API.account = Accounts.current(); API.info = null; API.cache = {}; API.epgCache = {}; API.loadedAt = 0; API.xmltv = null; API.lists = {}; guideLoading = null;
     if (window.TMDB) TMDB.mem = {};
   };
 
+  // ---------- catalogue kept on the device ----------
+  // Lists are saved to files by the app: the next start reads them instantly, and they are
+  // refreshed in the background once they are more than 12 hours old.
+  var hasDisk = !!(window.Native && Native.cacheInfo && Native.cacheDownload);
+  var diskReqs = {}, diskId = 0;
+  window.NativeCache = {
+    done: function (id, ok, result, err) { var r = diskReqs[id]; delete diskReqs[id]; if (r) r(ok, result, err); }
+  };
+  function nativeTask(method, url, key) {
+    return new Promise(function (resolve, reject) {
+      var id = ++diskId;
+      diskReqs[id] = function (ok, r, e) { if (ok) resolve(r); else reject(new Error(e || 'échec')); };
+      Native[method](id, url, key);
+    });
+  }
+  function readFile(path) {
+    return new Promise(function (resolve, reject) {
+      var x = new XMLHttpRequest();
+      x.open('GET', path, true);
+      x.onload = function () { if (x.responseText) resolve(x.responseText); else reject(new Error('fichier vide')); };
+      x.onerror = function () { reject(new Error('lecture impossible')); };
+      x.send();
+    });
+  }
+  function diskKey(key) { return (API.account && API.account.id || 'x') + '_' + key; }
+  function diskInfo(key) { try { return JSON.parse(Native.cacheInfo(diskKey(key))); } catch (e) { return { exists: false }; } }
+  function toList(r) { return Array.isArray(r) ? r : (r && typeof r === 'object' ? Object.keys(r).map(function (k) { return r[k]; }) : []); }
+  function parseList(t) { try { return toList(JSON.parse(t)); } catch (e) { throw new Error('Réponse invalide du serveur'); } }
+  API.diskCache = hasDisk;
+  API.lists = {}; // key -> url of the lists loaded in this session
+
   function cached(key, action, extra) {
     if (API.cache[key]) return API.cache[key];
-    if (!API.loadedAt) API.loadedAt = Date.now();
-    var p = getJson(base() + '&action=' + action + (extra || '')).then(function (r) {
-      return Array.isArray(r) ? r : (r && typeof r === 'object' ? Object.keys(r).map(function (k) { return r[k]; }) : []);
-    });
+    var url = base() + '&action=' + action + (extra || '');
+    API.lists[key] = url;
+    var p;
+    if (hasDisk) {
+      var info = diskInfo(key);
+      if (info.exists) {
+        var at = Date.now() - info.age;
+        API.loadedAt = API.loadedAt ? Math.min(API.loadedAt, at) : at;
+        p = readFile(info.path).then(parseList).catch(function () {
+          return nativeTask('cacheDownload', url, diskKey(key)).then(readFile).then(parseList);
+        });
+      } else {
+        if (!API.loadedAt) API.loadedAt = Date.now();
+        p = nativeTask('cacheDownload', url, diskKey(key)).then(readFile).then(parseList).catch(function () { return getJson(url).then(toList); });
+      }
+    } else {
+      if (!API.loadedAt) API.loadedAt = Date.now();
+      p = getJson(url).then(toList);
+    }
     API.cache[key] = p;
-    p.catch(function () { delete API.cache[key]; });
+    p.catch(function () { if (API.cache[key] === p) delete API.cache[key]; });
     return p;
   }
 
   // Catalogue automatically reloaded every 12 hours (new movies, series, channels)
   API.RELOAD_MS = 12 * 3600 * 1000;
   API.isStale = function () { return !!API.loadedAt && Date.now() - API.loadedAt > API.RELOAD_MS; };
+  var reloading = null;
+  // Resolves to true once fresh lists are in place. With the on-device copy the download
+  // happens in the background and the current lists stay usable until it is done.
   API.reloadCatalog = function () {
-    API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
-    return API.refreshInfo().catch(function () { });
+    if (!hasDisk) {
+      API.cache = {}; API.epgCache = {}; API.loadedAt = 0; API.xmltv = null; API.lists = {};
+      return API.refreshInfo().catch(function () { }).then(function () { API.loadGuide(true); return true; });
+    }
+    if (reloading) return reloading;
+    var lists = API.lists, keys = Object.keys(lists);
+    API.loadedAt = Date.now();
+    reloading = Promise.all(keys.map(function (k) {
+      return nativeTask('cacheDownload', lists[k], diskKey(k)).then(function () { return k; }, function () { return null; });
+    })).then(function (done) {
+      done.forEach(function (k) { if (k) delete API.cache[k]; });
+      Object.keys(API.cache).forEach(function (k) { if (/^(vodinfo|serinfo|fullepg)_/.test(k)) delete API.cache[k]; });
+      API.epgCache = {};
+      API.refreshInfo().catch(function () { });
+      API.loadGuide(true);
+      return done.some(Boolean);
+    }).then(function (r) { reloading = null; return r; }, function () { reloading = null; return false; });
+    return reloading;
   };
+  API.forgetDisk = function (acc) { if (hasDisk && acc && acc.id && Native.cacheClear) Native.cacheClear(acc.id + '_'); };
+
+  // ---------- full TV guide (XMLTV) ----------
+  // The provider's xmltv.php is downloaded and reduced by the app to the channels'
+  // programmes from 12 h ago to 2 days ahead; the short per-channel EPG is the fallback.
+  API.xmltv = null;
+  var guideLoading = null;
+  API.loadGuide = function (force) {
+    if (!hasDisk || !Native.guideBuild || !API.account) return Promise.resolve(null);
+    if (guideLoading && !force) return guideLoading;
+    var a = API.account;
+    var url = a.server + '/xmltv.php?username=' + encodeURIComponent(a.user) + '&password=' + encodeURIComponent(a.pass);
+    var info = diskInfo('xmltv');
+    var fresh = info.exists && info.age < 6 * 3600000 && !force;
+    var p = (fresh ? Promise.resolve(info.path) : nativeTask('guideBuild', url, diskKey('xmltv')).then(function (r) { return r.split('|')[0]; })
+      .catch(function (e) { if (info.exists) return info.path; throw e; }))
+      .then(readFile).then(function (t) {
+        var g = JSON.parse(t);
+        if (!g || !g.ch || !Object.keys(g.ch).length) return null;
+        if (a === API.account) { API.xmltv = g; API.epgCache = {}; }
+        return g;
+      }).catch(function () { return null; });
+    guideLoading = p;
+    return p;
+  };
+  function epgIdOf(streamId) {
+    var m = API._epgIds;
+    return m ? m[String(streamId)] : null;
+  }
+  function xmltvList(streamId) {
+    var g = API.xmltv, id = g && epgIdOf(streamId);
+    var l = id && g.ch[id];
+    if (!l || !l.length) return null;
+    return l.map(function (e) { return { title: e[2] || '', desc: e[3] || '', start: e[0] * 1000, end: e[1] * 1000 }; });
+  }
+  API.guideFor = xmltvList;
 
   API.categories = function (kind) { // kind: live | vod | series
     return cached('cat_' + kind, 'get_' + kind + '_categories');
   };
   API.liveStreams = function () {
     return cached('live', 'get_live_streams').then(function (list) {
-      list.forEach(function (s, i) { if (!s.num) s.num = i + 1; });
+      var ids = {};
+      list.forEach(function (s, i) { if (!s.num) s.num = i + 1; if (s.epg_channel_id) ids[String(s.stream_id)] = String(s.epg_channel_id); });
+      API._epgIds = ids;
       return list;
     });
   };
@@ -153,6 +256,14 @@
   // Short EPG for a channel, cached 10 minutes
   API.epg = function (streamId, limit) {
     var k = streamId + '_' + (limit || 4), c = API.epgCache[k], now = Date.now();
+    var x = xmltvList(streamId);
+    if (x) {
+      if ((limit || 4) <= 4) {
+        var from = x.findIndex(function (e) { return e.end > now; });
+        return Promise.resolve(from < 0 ? [] : x.slice(from, from + (limit || 4)));
+      }
+      return Promise.resolve(x.filter(function (e) { return e.end > now - 4 * 3600000; }));
+    }
     if (c && now - c.t < 600000) return c.p;
     var p = getJson(base() + '&action=get_short_epg&stream_id=' + streamId + '&limit=' + (limit || 4)).then(function (r) {
       var l = (r && r.epg_listings) || [];
@@ -177,6 +288,7 @@
   // Queue so the live list does not flood the server with EPG requests
   var epgQueue = [], epgRunning = 0;
   API.epgQueued = function (streamId, limit) {
+    if (xmltvList(streamId)) return API.epg(streamId, limit);
     return new Promise(function (resolve) {
       epgQueue.push({ id: streamId, limit: limit, resolve: resolve });
       pump();

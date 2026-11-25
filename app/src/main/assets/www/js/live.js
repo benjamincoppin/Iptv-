@@ -6,6 +6,9 @@
   var el, cats = [], all = [], byCat = {}, list = [], catId = null, playing = null, triedAlt = false, retried = false;
   var infoTimer, numBuf = '', numTimer, io, sentinelIo, rendered = 0, okHeld = false, pendingOk = null, clockTimer;
   var CHUNK = 120;
+  // Pause / rewind of the live stream. shift = null when watching live, otherwise
+  // { mode: 'local' (paused on the device) | 'server' (provider's timeshift), offset: ms behind live, paused, pausedAt }
+  var shift = null, tsTimer = null;
   var ASPECT_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9v6M17 9v6"/></svg>';
   function updateAspectBtn() {
     var b = el && el.querySelector('.aspbtn span');
@@ -18,7 +21,7 @@
 
   L.start = function (o) {
     o = o || {};
-    if (L.open) { if (o.id) playById(o.id); return; }
+    if (L.open) { if (o.id) playById(o.id); if (o.restart) setTimeout(restartProgramme, 300); return; }
     L.open = true;
     var layer = document.getElementById('layer');
     layer.innerHTML = '';
@@ -48,6 +51,7 @@
       selectCat(catId, false);
       play(start);
       if (o.id) hidePanel(); else showPanel(true);
+      if (o.restart) setTimeout(restartProgramme, 300);
     }).catch(function (e) {
       buildUi();
       msg('Impossible de charger les chaînes : ' + e.message);
@@ -61,12 +65,25 @@
         '<div class="cats nav-group" data-pad-top="40"><div class="ph">Catégories</div>' +
           cats.map(function (c) { return '<button class="f cat" data-c="' + U.esc(c.id) + '">' + U.esc(c.name) + '</button>'; }).join('') +
         '</div>' +
-        '<div class="chans nav-group" data-pad-top="40"><div class="chead"><button class="ph catpick f"></button><button class="f aspbtn" aria-label="Format d\'image">' + ASPECT_ICON + '<span></span></button></div><div class="clist"></div></div>' +
+        '<div class="chans nav-group" data-pad-top="40"><div class="chead"><button class="ph catpick f"></button><button class="f aspbtn" aria-label="Format d\'image">' + ASPECT_ICON + '<span></span></button></div><div class="tsctl"></div><div class="clist"></div></div>' +
       '</div>' +
-      '<div class="infobar"><div class="l1"><span class="cn"></span><span class="tm"></span><span class="q"></span></div><div class="now"></div><div class="pb"><i style="width:0"></i></div><div class="nx"></div></div>' +
+      '<div class="tsbadge" style="display:none"></div>' +
+      '<div class="infobar"><div class="l1"><span class="cn"></span><span class="tm"></span><span class="rec" style="display:none">● REC</span><span class="q"></span></div><div class="now"></div><div class="pb"><i style="width:0"></i></div><div class="nx"></div></div>' +
       '<div class="loading" style="display:none"><div class="spinner"></div></div>');
     U.$$('.cat', el).forEach(function (b) { b.addEventListener('click', function () { selectCat(b.dataset.c, true); }); });
     el.querySelector('.aspbtn').addEventListener('click', function () { Aspect.choose('live', updateAspectBtn); });
+    el.querySelector('.tsctl').addEventListener('click', function (e) {
+      var b = e.target.closest('[data-ts]'); if (!b) return;
+      var a = b.dataset.ts;
+      if (a === 'pause') togglePause();
+      else if (a === 'back') seekBy(-60000);
+      else if (a === 'back10') seekBy(-600000);
+      else if (a === 'fwd') seekBy(60000);
+      else if (a === 'live') goLive(true);
+      else if (a === 'start') restartProgramme();
+      else if (a === 'rec') recToggle(playing);
+      updateTs();
+    });
     updateAspectBtn();
     var cp = el.querySelector('.catpick');
     cp.addEventListener('click', function () {
@@ -170,6 +187,7 @@
 
   function play(s) {
     playing = s; triedAlt = false; retried = false;
+    shift = null;
     U.$$('.ch.playing', el).forEach(function (b) { b.classList.remove('playing'); });
     var b = el.querySelector('.ch[data-id="' + s.stream_id + '"]'); if (b) b.classList.add('playing');
     var m = el.querySelector('.lvmsg'); if (m) m.remove();
@@ -177,6 +195,7 @@
     Hist.pushLive(chanObj(s));
     startStream(API.liveFormat());
     updateInfo();
+    updateTs();
     flashInfo();
   }
   function startStream(fmt) {
@@ -208,10 +227,16 @@
     } else if (type === 'buffering') {
       if (ld) ld.style.display = '';
     } else if (type === 'completed') {
-      // live streams should not end: reconnect
-      if (playing) startStream(playing._fmt);
+      // live streams should not end: reconnect (in rewind mode, continue from where it stopped)
+      if (playing && shift && shift.mode === 'server') playServerAt(Date.now() - behind());
+      else if (playing) startStream(playing._fmt);
     } else if (type === 'error') {
       if (!playing) return;
+      if (shift && shift.mode === 'server') {
+        U.toast('Retour en arrière impossible sur cette chaîne pour le moment');
+        goLive(false);
+        return;
+      }
       if (!triedAlt && Settings.get('liveFormat') === 'auto') {
         triedAlt = true;
         startStream(playing._fmt === 'm3u8' ? 'ts' : 'm3u8');
@@ -234,6 +259,8 @@
     var s = playing;
     ib.querySelector('.cn').textContent = (s.num ? s.num + ' · ' : '') + U.cleanName(s.name);
     ib.querySelector('.q').textContent = (s._fmt || '').toUpperCase() + (Fav.has('live', s.stream_id) ? '  ★' : '');
+    var rec = window.Recordings && Recordings.activeFor(s.stream_id);
+    ib.querySelector('.rec').style.display = rec ? '' : 'none';
     API.epg(s.stream_id, 4).then(function (ep) {
       if (!el || playing !== s) return;
       var nn = API.nowNext(ep);
@@ -244,6 +271,126 @@
       ib.querySelector('.nx').textContent = nn.next ? 'Ensuite : ' + U.hm(nn.next.start) + ' ' + nn.next.title : '';
     });
   }
+
+  // ---------- pause / rewind ----------
+  function behind() {
+    if (!shift) return 0;
+    return shift.offset + (shift.paused ? Date.now() - shift.pausedAt : 0);
+  }
+  function canRewind() { return playing && API.hasArchive(playing); }
+  function maxBehind() { return playing ? (+playing.tv_archive_duration || 0) * 86400000 - 10 * 60000 : 0; }
+
+  function togglePause() {
+    if (!playing) return;
+    if (shift && shift.paused) {
+      shift.offset = behind();
+      shift.paused = false;
+      // the device keeps about an hour of buffer; beyond that, continue from the provider's replay
+      if (shift.mode === 'local' && shift.offset > 55 * 60000 && canRewind()) playServerAt(Date.now() - shift.offset);
+      else Native.resume();
+    } else {
+      if (!shift) shift = { mode: 'local', offset: 0 };
+      shift.paused = true;
+      shift.pausedAt = Date.now();
+      Native.pause();
+    }
+    updateTs();
+    flashInfo();
+  }
+
+  function seekBy(delta) {
+    if (!playing) return;
+    if (!canRewind()) {
+      U.toast(delta < 0 ? 'Retour en arrière indisponible : cette chaîne n\'a pas de replay (la pause fonctionne)' : 'Tu es déjà en direct');
+      return;
+    }
+    var target = behind() - delta;
+    if (target < 45000) { goLive(true); return; }
+    if (target > maxBehind()) { target = maxBehind(); U.toast('Limite du replay atteinte'); }
+    playServerAt(Date.now() - target);
+  }
+
+  function playServerAt(t) {
+    var start = Math.floor(t / 60000) * 60000, now = Date.now();
+    var url = API.replayUrl(playing.stream_id, { start: start, end: now + 3 * 3600000 });
+    shift = { mode: 'server', offset: now - start, paused: false };
+    var ld = el && el.querySelector('.panel ~ .loading'); if (ld) ld.style.display = '';
+    Aspect.apply('live');
+    Native.play(url, 0);
+    updateTs();
+    flashInfo();
+  }
+
+  function goLive(toast) {
+    if (!playing) return;
+    var was = shift;
+    shift = null;
+    if (was && was.mode === 'local' && !was.paused && was.offset < 2000) { Native.resume(); }
+    else startStream(playing._fmt || API.liveFormat());
+    if (toast) U.toast('Retour au direct');
+    updateTs();
+  }
+
+  function restartProgramme() {
+    if (!playing) return;
+    if (!canRewind()) { U.toast('Cette chaîne n\'a pas de replay'); return; }
+    API.epg(playing.stream_id, 4).then(function (ep) {
+      var nn = API.nowNext(ep);
+      if (!nn.now) { U.toast('Programme en cours inconnu'); return; }
+      playServerAt(nn.now.start);
+      U.toast('Depuis le début : ' + nn.now.title);
+    });
+  }
+
+  function recToggle(s) {
+    if (!s || !window.Recordings) return;
+    var r = Recordings.activeFor(s.stream_id);
+    if (r) { Recordings.stop(r.id); U.toast('Enregistrement arrêté'); setTimeout(L.refreshInfo, 800); }
+    else Recordings.recordNow(s, function () { setTimeout(L.refreshInfo, 1500); });
+  }
+
+  function minsLabel(ms) {
+    var m = Math.round(ms / 60000);
+    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + U.pad(m % 60);
+  }
+
+  function updateBadge() {
+    var badge = el && el.querySelector('.tsbadge');
+    if (!badge) return;
+    if (!shift) { badge.style.display = 'none'; return; }
+    var b = behind();
+    badge.style.display = '';
+    badge.innerHTML = (shift.paused ? '❚❚ En pause' : '◀◀ Différé') + (b > 30000 ? ' · −' + U.esc(minsLabel(b)) : '') +
+      '<small>' + (canRewind() ? '◀ ▶ : −/+ 1 min · ' : '') + 'OK : panneau (Pause, Direct)</small>';
+  }
+
+  function updateTs() {
+    if (!el) return;
+    var ctl = el.querySelector('.tsctl');
+    clearInterval(tsTimer); tsTimer = null;
+    updateBadge();
+    if (shift && shift.paused) tsTimer = setInterval(updateBadge, 15000);
+    if (ctl && playing) {
+      var focusedTs = Nav.current && ctl.contains(Nav.current) ? Nav.current.dataset.ts : null;
+      var rec = window.Recordings && Recordings.supported() && Recordings.activeFor(playing.stream_id);
+      var h = '<button class="f tsb" data-ts="pause">' + (shift && shift.paused ? '▶ Reprendre' : '❚❚ Pause') + '</button>';
+      if (canRewind()) h += '<button class="f tsb" data-ts="back">−1 min</button><button class="f tsb" data-ts="back10">−10 min</button><button class="f tsb" data-ts="start">⏮ Début</button>';
+      if (shift && shift.mode === 'server') h += '<button class="f tsb" data-ts="fwd">+1 min</button>';
+      if (shift) h += '<button class="f tsb live" data-ts="live">● Direct</button>';
+      if (window.Recordings && Recordings.supported()) h += '<button class="f tsb' + (rec ? ' recon' : '') + '" data-ts="rec">' + (rec ? '■ Arrêter l\'enreg.' : '● Enregistrer') + '</button>';
+      ctl.innerHTML = h;
+      if (focusedTs) { var nb = ctl.querySelector('[data-ts="' + focusedTs + '"]') || ctl.querySelector('.tsb'); if (nb) Nav.focus(nb, { noScroll: true }); }
+    }
+  }
+  L.refreshInfo = function () { updateInfo(); updateTs(); };
+
+  // App back from the background: the paused position is kept, otherwise restart the stream
+  L.onResume = function () {
+    if (!playing) return;
+    if (shift && shift.paused) return;
+    if (shift && shift.mode === 'server') playServerAt(Date.now() - behind());
+    else { shift = null; startStream(playing._fmt || API.liveFormat()); updateTs(); }
+  };
 
   function panelOpen() { return el && !el.classList.contains('nopanel'); }
   function showPanel(focusPlaying) {
@@ -272,7 +419,10 @@
     Modal.choose(U.cleanName(s.name), [
       { label: fav ? 'Retirer des favoris' : 'Ajouter aux favoris', value: 'fav' },
       { label: 'Regarder', value: 'play' }
-    ].concat(API.hasArchive(s) ? [{ label: 'Replay (' + s.tv_archive_duration + ' derniers jours)', value: 'replay' }] : []).concat([
+    ].concat(window.Recordings && Recordings.supported() ? [Recordings.activeFor(s.stream_id) ? { label: '■ Arrêter l\'enregistrement', value: 'rec' } : { label: '● Enregistrer le programme en cours', value: 'rec' }] : [])
+     .concat(playing && s.stream_id === playing.stream_id ? [{ label: shift && shift.paused ? '▶ Reprendre la lecture' : '❚❚ Mettre en pause', value: 'pause' }] : [])
+     .concat(playing && s.stream_id === playing.stream_id && API.hasArchive(s) ? [{ label: '⏮ Revoir depuis le début du programme', value: 'restart' }] : [])
+     .concat(API.hasArchive(s) ? [{ label: 'Replay (' + s.tv_archive_duration + ' derniers jours)', value: 'replay' }] : []).concat([
       { label: 'Format d\'image : ' + Aspect.labels[Aspect.get('live')], value: 'aspect' },
       { label: 'Ouvrir dans un lecteur externe', value: 'ext' }
     ]), function (v) {
@@ -284,6 +434,9 @@
         else if (b) { var star = b.querySelector('span[style*="accent"]'); if (added && !star) b.querySelector('.dot').insertAdjacentHTML('beforebegin', '<span style="color:var(--accent);font-size:12px">★</span>'); if (!added && star) star.remove(); }
         updateInfo();
       } else if (v === 'play') play(s);
+      else if (v === 'rec') recToggle(s);
+      else if (v === 'pause') { togglePause(); hidePanel(); }
+      else if (v === 'restart') { restartProgramme(); hidePanel(); }
       else if (v === 'replay') { L.close(); App.go('replay', { id: s.stream_id }); }
       else if (v === 'aspect') setTimeout(function () { Aspect.choose('live', updateAspectBtn); }, 0);
       else if (v === 'ext') { if (!Native.openExternal(API.liveUrl(s.stream_id), s.name)) U.toast('Aucun lecteur externe installé'); }
@@ -308,8 +461,14 @@
     if (!panelOpen()) {
       if (act === 'up') { zap(-1); return true; }
       if (act === 'down') { zap(1); return true; }
-      if (act === 'ok' || act === 'left') { showPanel(true); return true; }
-      if (act === 'right') { if (el.classList.contains('noinfo')) flashInfo(); else el.classList.add('noinfo'); return true; }
+      if (act === 'ok') { showPanel(true); return true; }
+      if (act === 'left') { if (canRewind()) seekBy(-60000); else if (shift) flashInfo(); else showPanel(true); return true; }
+      if (act === 'right') {
+        if (shift && shift.mode === 'server') seekBy(60000);
+        else if (shift && shift.paused) togglePause();
+        else if (el.classList.contains('noinfo')) flashInfo(); else el.classList.add('noinfo');
+        return true;
+      }
       return true;
     }
     var cur = Nav.current;
@@ -345,6 +504,12 @@
     else if (k === 'menu' || k === 'yellow') { if (playing) channelMenu(playing); }
     else if (k === 'blue') Aspect.choose('live', updateAspectBtn);
     else if (k === 'stop') L.close();
+    else if (k === 'playpause') togglePause();
+    else if (k === 'pause') { if (!shift || !shift.paused) togglePause(); }
+    else if (k === 'play') { if (shift && shift.paused) togglePause(); }
+    else if (k === 'rew') seekBy(-60000);
+    else if (k === 'ff') { if (shift) seekBy(60000); }
+    else if (k === 'red') recToggle(playing);
   };
 
   L.back = function () {
@@ -369,7 +534,8 @@
     Native.stop();
     Native.setLandscape(false);
     API.clearEpgQueue();
-    clearTimeout(infoTimer); clearInterval(clockTimer);
+    clearTimeout(infoTimer); clearInterval(clockTimer); clearInterval(tsTimer);
+    shift = null;
     if (io) { io.disconnect(); io = null; }
     if (sentinelIo) { sentinelIo.disconnect(); sentinelIo = null; }
     NativeEvents.owner = null;

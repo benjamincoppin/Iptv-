@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var TOP = ['home', 'guide', 'replay', 'movies', 'series', 'favorites', 'search', 'settings', 'profiles'];
+  var TOP = ['home', 'guide', 'replay', 'movies', 'series', 'favorites', 'search', 'settings', 'profiles', 'recordings'];
   var profileAsked = false;
   var page = document.getElementById('page');
   var stack = [];       // [{route, params, scroll, key}]
@@ -101,6 +101,7 @@
   };
 
   App.afterOverlay = function (prevFocus) {
+    App.syncWatchNext();
     // Player closed: re-render detail/home pages so progress bars and resume buttons are up to date
     if (App.route === 'movie' || App.route === 'serie' || App.route === 'home') {
       var top = stack[stack.length - 1];
@@ -168,19 +169,73 @@
   App.onAppPause = function () {
     if (Player.open) { try { var s = JSON.parse(Native.state()); if (s.pos) Player._pausedAt = s.pos; } catch (e) { } }
   };
-  // Reload the catalogue when it is more than 12 hours old (checked every 10 min and when the app comes back)
+  // Reload the catalogue when it is more than 12 hours old (checked every 10 min and when the app comes back).
+  // With the on-device copy the new lists are downloaded in the background; the pages pick them up
+  // on their next display (the home page is redrawn right away when nothing is playing).
   App.checkCatalog = function () {
     if (!API.account || !API.isStale()) return;
-    if (Player.open || Live.open || Modal.isOpen()) return; // never interrupt playback: retried at the next check
-    API.reloadCatalog();
-    if (App.route === 'home' || App.route === 'movies' || App.route === 'series') App.refresh();
+    if (!API.diskCache && (Player.open || Live.open || Modal.isOpen())) return; // never interrupt playback
+    API.reloadCatalog().then(function (changed) {
+      if (changed && App.route === 'home' && !Player.open && !Live.open && !Modal.isOpen()) App.refresh();
+    });
   };
   setInterval(App.checkCatalog, 10 * 60 * 1000);
+
+  // ---------- Android TV home screen: "Continuer à regarder" ----------
+  var wnTimer = null;
+  App.syncWatchNext = function () {
+    clearTimeout(wnTimer);
+    wnTimer = setTimeout(function () {
+      try {
+        if (!Native.watchNextSupported || !Native.watchNextSupported() || !API.account) return;
+        var items = Hist.resumeList().map(function (h) {
+          var ep = h.type === 'episode';
+          return {
+            key: API.account.id + ':' + (ep ? 's' + h.seriesId : 'm' + h.id),
+            type: ep ? 'episode' : 'movie',
+            title: ep ? (h.seriesName || h.name || '') : (h.name || ''),
+            subtitle: ep ? 'S' + h.season + ' É' + h.ep + (h.name && h.name !== h.seriesName ? ' · ' + h.name : '') : '',
+            image: U.imgUrl ? U.imgUrl(h.img) : h.img,
+            pos: Math.round(h.pos || 0), dur: Math.round(h.dur || 0), ts: h.watched || h.ts || Date.now(),
+            link: ep ? 'iptvplus://play?type=episode&series=' + encodeURIComponent(h.seriesId) + '&id=' + encodeURIComponent(h.id) + '&acc=' + API.account.id
+                     : 'iptvplus://play?type=movie&id=' + encodeURIComponent(h.id) + '&acc=' + API.account.id
+          };
+        });
+        Native.watchNext(JSON.stringify(items));
+      } catch (e) { }
+    }, 1500);
+  };
+
+  // Links from the Android TV home screen / notifications
+  App.deepLink = function (link) {
+    if (!link || !API.account) return;
+    var m = String(link).match(/^iptvplus:\/\/([^\/?#]+)\/?\??(.*)$/);
+    if (!m) return;
+    var q = {};
+    (m[2] || '').split('&').forEach(function (kv) { var p = kv.split('='); if (p[0]) q[p[0]] = decodeURIComponent(p[1] || ''); });
+    if (q.acc && q.acc !== API.account.id && Accounts.list().some(function (a) { return a.id === q.acc; })) {
+      API.switchAccount(q.acc);
+      if (window.Sync) Sync.now();
+    }
+    if (Modal.isOpen()) Modal.close();
+    if (m[1] === 'recordings') return App.go('recordings');
+    if (m[1] !== 'play') return;
+    if (q.type === 'movie' && q.id) App.go('movie', { id: q.id, resume: true });
+    else if (q.type === 'episode' && q.series) App.go('serie', { id: q.series, resume: true });
+    else if (q.type === 'live' && q.id) App.go('live', { id: q.id });
+  };
+
+  // Recording folder chosen with the system picker
+  App.recFolderPicked = function (ok, label) {
+    if (ok) U.toast('Enregistrements : ' + label);
+    if (window.Recordings && Recordings.onFolder) Recordings.onFolder(ok, label);
+  };
 
   App.onAppResume = function () {
     App.checkCatalog();
     if (window.Sync) Sync.refresh(10000);
-    if (Live.open) { /* restart current live stream after the app comes back */ Native.resume(); }
+    if (Live.open) Live.onResume();
+    if (Native.recCheck) Native.recCheck();
   };
 
   App.start = function () {
@@ -190,6 +245,20 @@
     if (window.Views && Views.applySubStyle) Views.applySubStyle();
     if (window.Sync) setTimeout(function () { Sync.now().then(function () { App.updateAvatar(); }); }, 500);
     setTimeout(function () { if (window.Update) Update.check(false); }, 8000);
+    setTimeout(function () {
+      if (!API.account) return;
+      API.loadGuide();
+      App.checkCatalog();
+      App.syncWatchNext();
+      if (Native.requestNotifications) Native.requestNotifications();
+    }, 4000);
+    var link = '';
+    try { link = Native.takeDeepLink ? Native.takeDeepLink() : ''; } catch (e) { }
+    if (link && /^iptvplus:\/\/play/.test(link)) {
+      if (Profiles.list().length > 1 && Settings.get('askProfile') !== false) App._pendingLink = link;
+      else { setTimeout(function () { App.deepLink(link); }, 300); return App.go('home'); }
+    }
+    if (link && /^iptvplus:\/\/recordings/.test(link)) return App.go('recordings');
     if (Profiles.list().length > 1 && Settings.get('askProfile') !== false) { profileAsked = true; return App.go('profiles'); }
     return App.go(Settings.get('startLive') ? 'live' : 'home');
   };
@@ -198,8 +267,11 @@
   App.afterProfileChange = function () {
     App.updateAvatar();
     U.toast('Profil : ' + Profiles.current().name);
-    App.go(Settings.get('startLive') && profileAsked ? 'live' : 'home');
+    var pl = App._pendingLink; App._pendingLink = null;
+    App.go(Settings.get('startLive') && profileAsked && !pl ? 'live' : 'home');
     profileAsked = false;
+    if (pl) setTimeout(function () { App.deepLink(pl); }, 300);
+    App.syncWatchNext();
   };
 
   App.updateProgress = function (state, pct, msg) { if (window.Update) Update.progress(state, pct, msg); };
