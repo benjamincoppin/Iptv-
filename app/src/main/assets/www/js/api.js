@@ -202,11 +202,19 @@
 
   // ---------- TMDB (images et résumés des épisodes) ----------
   var TMDB = { mem: {} };
-  TMDB.key = function () {
-    var k = (Settings.get('tmdbKey') || '').trim();
-    if (!k && window.IPTV_CONFIG) k = String(IPTV_CONFIG.tmdbKey || '').trim();
-    return k;
+  // Each user brings their own TMDB key (Paramètres or login screen); it is shared between
+  // the user's own devices through the sync (stored under their own Xtream account entry).
+  TMDB.key = function () { return (Settings.get('tmdbKey') || '').trim(); };
+  TMDB.setKey = function (k) {
+    k = String(k || '').replace(/[^A-Za-z0-9._-]/g, '');
+    Settings.set('tmdbKey', k);
+    U.store.del('tmdbIds'); TMDB.mem = {};
+    var all = U.store.get('hist', {});
+    all['cfg:tmdbKey'] = { type: 'cfg', v: k, ts: Date.now() };
+    U.store.set('hist', all);
+    if (window.Sync) Sync.soon();
   };
+  TMDB.check = function () { return TMDB.get('/configuration').then(function () { return true; }, function () { return false; }); };
   TMDB.enabled = function () { return !!TMDB.key(); };
   TMDB.get = function (path, params) {
     var key = TMDB.key();
@@ -314,7 +322,7 @@
     remove: function (type, id) { var all = this.all(); var x = all[type + ':' + id]; if (x) { x.hidden = true; x.ts = Date.now(); } U.store.set('hist', all); },
     clear: function () {
       var all = this.all(), now = Date.now();
-      Object.keys(all).forEach(function (k) { all[k].hidden = true; all[k].ts = now; });
+      Object.keys(all).forEach(function (k) { if (all[k].type !== 'cfg') { all[k].hidden = true; all[k].ts = now; } });
       U.store.set('hist', all); U.store.set('recentLive', []);
       if (window.Sync) Sync.soon();
     },

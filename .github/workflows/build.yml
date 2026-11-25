@@ -34,17 +34,6 @@ jobs:
             echo "::warning::Secret IPTV_KEYSTORE_B64 absent : APK signé avec une clé de debug"
           fi
 
-      - name: Clé TMDB
-        env:
-          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-        run: |
-          if [ -n "$TMDB_API_KEY" ]; then
-            KEY=$(printf '%s' "$TMDB_API_KEY" | tr -cd 'A-Za-z0-9._-')
-            sed -i "s/tmdbKey: ''/tmdbKey: '$KEY'/" app/src/main/assets/www/js/config.js
-          else
-            echo "::warning::Secret TMDB_API_KEY absent : images TMDB désactivées par défaut"
-          fi
-
       - name: Compilation
         env:
           KEYSTORE_PASSWORD: ${{ secrets.IPTV_KEYSTORE_PASSWORD }}

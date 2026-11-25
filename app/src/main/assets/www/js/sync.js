@@ -51,6 +51,11 @@
           var r = JSON.parse(x.responseText);
           var merged = merge(Hist.all(), (r && r.items) || {});
           U.store.set('hist', merged);
+          // Settings shared between the user's devices (TMDB key typed once on the phone, used on the TV)
+          var cfg = merged['cfg:tmdbKey'];
+          if (cfg && typeof cfg.v === 'string' && cfg.v !== (Settings.get('tmdbKey') || '')) {
+            Settings.set('tmdbKey', cfg.v); U.store.del('tmdbIds'); TMDB.mem = {};
+          }
           S.last = Date.now(); S.error = null;
           U.store.set('syncLast', S.last);
           var changed = JSON.stringify(merged) !== before;
