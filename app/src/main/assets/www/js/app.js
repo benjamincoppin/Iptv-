@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  var TOP = ['home', 'guide', 'replay', 'movies', 'series', 'favorites', 'search', 'settings', 'profiles', 'recordings'];
+  var TOP = ['home', 'guide', 'replay', 'movies', 'series', 'favorites', 'search', 'settings', 'profiles', 'recordings', 'downloads'];
   var profileAsked = false;
   var page = document.getElementById('page');
   var stack = [];       // [{route, params, scroll, key}]

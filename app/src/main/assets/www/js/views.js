@@ -408,8 +408,9 @@
     var id = m.stream_id;
     var h = Hist.get('movie', id);
     var start = !fromStart && h && h.pos > 30000 && h.pos < h.dur * 0.94 ? h.pos : 0;
+    var local = window.Downloads && Downloads.localUrl('movie', id);
     Player.start({
-      kind: 'movie', url: API.movieUrl(id, m.container_extension), title: U.cleanName(m.name), sub: m._sub || '',
+      kind: 'movie', url: local || API.movieUrl(id, m.container_extension), title: U.cleanName(m.name), sub: m._sub || '',
       startMs: start,
       hist: { type: 'movie', id: id, name: U.cleanName(m.name), img: m._backdrop || m.stream_icon, ext: m.container_extension }
     });
@@ -445,6 +446,7 @@
               (canResume ? '<button class="f btn" data-a="start" data-key="start">Depuis le début</button>' : '') +
               '<button class="f btn" data-a="fav" data-key="fav">' + (fav ? HEART_ON + ' Dans ma liste' : HEART + ' Ma liste') + '</button>' +
               '<button class="f btn hidden" data-a="trailer" data-key="trailer">' + I.play + ' Bande-annonce</button>' +
+              (window.Downloads && Downloads.supported() ? '<button class="f btn" data-a="dl" data-key="dl"></button>' : '') +
             '</div></div></div></div>';
       var bg = U.$('.detail .bg', page);
       if (m._backdrop) bg.style.backgroundImage = 'url("' + String(m._backdrop).replace(/"/g, '%22') + '")';
@@ -454,6 +456,11 @@
           if (a === 'play') V.playMovie(m);
           else if (a === 'start') V.playMovie(m, true);
           else if (a === 'trailer') V.openTrailer(b.dataset.yt);
+          else if (a === 'dl') {
+            var st = Downloads.state('movie', m.stream_id);
+            if (!st) { Downloads.movie(m, year); setTimeout(dlLabel, 500); }
+            else Downloads.menu(st.r, dlLabel);
+          }
           else if (a === 'fav') {
             var on = Fav.toggle('movie', { id: m.stream_id, name: U.cleanName(m.name), icon: m.stream_icon });
             b.innerHTML = on ? HEART_ON + ' Dans ma liste' : HEART + ' Ma liste';
@@ -461,6 +468,14 @@
           }
         });
       });
+      function dlLabel() {
+        var b = U.$('[data-a="dl"]', page);
+        if (!b || !page.isConnected) return;
+        var st = Downloads.state('movie', m.stream_id);
+        b.innerHTML = !st ? '⬇ Télécharger' : st.done ? '✓ Téléchargé' : (st.failed ? '⚠ ' : '⬇ ') + st.label;
+        if (st && st.busy) setTimeout(dlLabel, 2000);
+      }
+      if (window.Downloads && Downloads.supported()) dlLabel();
       if (params.resume && canResume && !params._restore) setTimeout(function () { V.playMovie(m); }, 50);
       V.findTrailer(info.youtube_trailer, TMDB.enabled() ? function () { return TMDB.movieId(m.stream_id, info, m.name).then(function (id) { return id ? TMDB.trailer('movie', id) : null; }); } : null)
         .then(function (k) { var b = U.$('[data-a="trailer"]', page); if (k && b) { b.dataset.yt = k; b.classList.remove('hidden'); } });
@@ -509,8 +524,9 @@
         var hh = Hist.get('episode', e.id);
         var start = hh && hh.pos > 30000 && hh.dur && hh.pos < hh.dur * 0.94 ? hh.pos : 0;
         var idx = flat.indexOf(item);
+        var local = window.Downloads && Downloads.localUrl('episode', e.id);
         return {
-          kind: 'episode', url: API.episodeUrl(e.id, e.container_extension),
+          kind: 'episode', url: local || API.episodeUrl(e.id, e.container_extension),
           title: name, sub: 'S' + item.s + ' · É' + e.episode_num + (e.title ? ' · ' + epTitle(e) : ''),
           startMs: start,
           hist: { type: 'episode', id: e.id, name: epTitle(e), img: U.imgUrl(ei.movie_image) || U.imgUrl(ei.cover_big) || (seasonImg[String(item.s)] || []).map(U.imgUrl).filter(Boolean)[0] || U.imgUrl(backdrop) || U.imgUrl(cover), ext: e.container_extension, seriesId: sid, seriesName: name, season: item.s, ep: e.episode_num },
@@ -548,7 +564,8 @@
               '<button class="f btn" data-a="fav" data-key="fav">' + (fav ? HEART_ON + ' Dans ma liste' : HEART + ' Ma liste') + '</button>' +
               '<button class="f btn hidden" data-a="trailer" data-key="trailer">' + I.play + ' Bande-annonce</button>' +
             '</div></div></div>' +
-          (seasons.length ? '<div class="seasons"><div class="chips nav-group">' + seasons.map(function (s) { return '<button class="f chip" data-s="' + U.esc(s) + '" data-key="season' + U.esc(s) + '">Saison ' + U.esc(s) + '</button>'; }).join('') + '</div></div>' : '') +
+          (seasons.length ? '<div class="seasons"><div class="chips nav-group">' + seasons.map(function (s) { return '<button class="f chip" data-s="' + U.esc(s) + '" data-key="season' + U.esc(s) + '">Saison ' + U.esc(s) + '</button>'; }).join('') +
+            (window.Downloads && Downloads.supported() ? '<button class="f chip dlseason" data-key="dlseason">⬇ Télécharger la saison</button>' : '') + '</div></div>' : '') +
           '<div class="episodes nav-group" id="eps"></div>' +
         '</div>';
       var bg = U.$('.detail .bg', page);
@@ -564,13 +581,27 @@
           var pct = hh && hh.dur ? Math.min(100, Math.round(hh.pos / hh.dur * 100)) : 0;
           var dur = ei.duration_secs ? U.minutesLabel(ei.duration_secs / 60) : U.hmsLabel(ei.duration);
           var tm = tmdbOf(it), plot = ei.plot || (tm && tm.overview) || '';
-          return '<button class="f ep" data-e="' + e.id + '" data-key="e' + e.id + '"><div class="eimg">' + U.imgChain(epImages(it)) + (pct ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') + '</div>' +
+          var dst = window.Downloads && Downloads.supported() ? Downloads.state('episode', e.id) : null;
+          var badge = dst ? '<span class="dlb' + (dst.done ? ' ok' : dst.failed ? ' ko' : '') + '">' + (dst.done ? '✓' : dst.failed ? '!' : '⬇') + '</span>' : '';
+          return '<button class="f ep" data-longpress data-e="' + e.id + '" data-key="e' + e.id + '"><div class="eimg">' + U.imgChain(epImages(it)) + badge + (pct ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') + '</div>' +
             '<div style="min-width:0"><div class="et">' + U.esc(e.episode_num + '. ' + epTitle(e)) + '</div><div class="ed">' + U.esc([dur, pct >= 94 ? 'Vu' : pct ? 'En cours' : ''].filter(Boolean).join(' · ')) + (plot ? ' — ' + U.esc(plot) : '') + '</div></div></button>';
         }).join('') : '<div class="empty">Aucun épisode.</div>';
         U.$$('.ep', box).forEach(function (b) {
           b.addEventListener('click', function () {
             var it = flat.find(function (x) { return String(x.e.id) === b.dataset.e; });
             if (it) playItem(it);
+          });
+          b.addEventListener('longpress', function () {
+            var it = flat.find(function (x) { return String(x.e.id) === b.dataset.e; });
+            if (!it) return;
+            if (!window.Downloads || !Downloads.supported()) return playItem(it);
+            var st = Downloads.state('episode', it.e.id);
+            if (st) return Downloads.menu(st.r, refreshEps, function () { playItem(it); });
+            Modal.choose('S' + it.s + ' · É' + it.e.episode_num + ' · ' + epTitle(it.e), [{ label: '▶ Regarder', value: 'play' }, { label: '⬇ Télécharger cet épisode', value: 'dl' }, { label: '⬇ Télécharger toute la saison', value: 'season' }], function (v) {
+              if (v === 'play') playItem(it);
+              else if (v === 'dl') { Downloads.episode(serieObj(), epObj(it)); setTimeout(refreshEps, 500); }
+              else if (v === 'season') { downloadSeason(); }
+            });
           });
         });
         loadTmdb(s);
@@ -593,7 +624,30 @@
           if (f) Nav.focus(f, { noScroll: true });
         }).catch(function (e) { console.warn(e); });
       }
-      U.$$('.chip', page).forEach(function (b) { b.addEventListener('click', function () { showSeason(b.dataset.s); }); });
+      function serieObj() { return { id: sid, name: name, cover: cover }; }
+      function epObj(it) {
+        var e = it.e, ei = e.info || {}, t = tmdbOf(it);
+        return { id: e.id, ext: e.container_extension, season: it.s, num: e.episode_num, title: epTitle(e), img: ownImage(ei) || (t && t.still) || '' };
+      }
+      function refreshEps() {
+        if (!page.isConnected) return;
+        var focusKey = Nav.current && page.contains(Nav.current) ? Nav.current.dataset.key : null;
+        var scroll = document.getElementById('page').scrollTop;
+        showSeason(season);
+        document.getElementById('page').scrollTop = scroll;
+        var f = focusKey && U.$('[data-key="' + focusKey + '"]', page);
+        if (f) Nav.focus(f, { noScroll: true });
+      }
+      function downloadSeason() {
+        var list = flat.filter(function (it) { return String(it.s) === String(season); });
+        Downloads.season(serieObj(), list.map(epObj));
+        setTimeout(refreshEps, 600);
+      }
+      U.$$('.chip[data-s]', page).forEach(function (b) { b.addEventListener('click', function () { showSeason(b.dataset.s); }); });
+      var dls = U.$('.chip.dlseason', page);
+      if (dls) dls.addEventListener('click', function () {
+        Modal.choose('Télécharger la saison ' + season + ' ?', [{ label: '⬇ Oui, télécharger les ' + flat.filter(function (it) { return String(it.s) === String(season); }).length + ' épisodes', value: 'yes' }, { label: 'Annuler', value: 'no' }], function (v) { if (v === 'yes') downloadSeason(); });
+      });
       U.$$('[data-a]', page).forEach(function (b) {
         b.addEventListener('click', function () {
           if (b.dataset.a === 'resume' && resumeItem) playItem(resumeItem);

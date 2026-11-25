@@ -369,6 +369,7 @@
       row('clearHist', 'Effacer l\'historique de ce profil', 'Vide « Reprendre la lecture » et les chaînes récentes', '') +
       (window.Recordings && Recordings.supported() ? head('Enregistrements') +
         row('recordings', 'Mes enregistrements', 'Programmes enregistrés sur la clé USB ou le disque dur', '') +
+        row('downloads', 'Mes téléchargements', 'Films et épisodes téléchargés, progression', '') +
         row('recsettings', 'Réglages des enregistrements', 'Emplacement, marges avant/après, plan B replay', '') : '') +
       head('Appareil') +
       row('sync', 'Synchronisation entre appareils', Sync.url() ? ('Profils, favoris, reprise et réglages partagés · ' + (AS.get('syncLast', 0) ? 'dernière synchro ' + U.hm(AS.get('syncLast', 0)) : 'jamais synchronisé')) : 'Adresse du serveur non configurée', Sync.url() ? 'Activée' : 'Désactivée') +
@@ -402,6 +403,7 @@
         });
         else if (k === 'reload') { U.toast('Rechargement des listes…'); API.reloadCatalog().then(function () { U.toast('Listes rechargées'); }); }
         else if (k === 'recordings') App.go('recordings');
+        else if (k === 'downloads') App.go('downloads');
         else if (k === 'recsettings') Recordings.settings();
         else if (k === 'clearHist') Modal.choose('Effacer l\'historique de « ' + prof.name + ' » ?', [{ label: 'Oui, effacer', value: 1 }, { label: 'Annuler', value: 0 }], function (v) { if (v) { Hist.clear(); U.toast('Historique effacé'); } });
         else if (k === 'sync') Modal.choose('Synchronisation', [

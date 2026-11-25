@@ -447,3 +447,12 @@ body.kbd .recs .rrow.f.focused{box-shadow:0 0 0 3px var(--text);background:var(-
 .sharebox .su{font-size:24px;font-weight:700;letter-spacing:.3px;word-break:break-all}
 .sharebox .sp{margin-top:8px;font-size:15px;color:var(--soft)}
 .sharebox .sp b{font-size:26px;letter-spacing:6px;color:var(--accent);margin-left:6px}
+
+/* ---------- téléchargements ---------- */
+.recs .rrow .lg.poster{width:44px;height:64px}
+.recs .rrow.st-queued .s,.recs .rrow.st-paused .s{color:var(--soft)}
+.ep .eimg{position:relative}
+.ep .dlb{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.75);color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.ep .dlb.ok{background:#2e7d32}
+.ep .dlb.ko{background:#c62828}
+.chip.dlseason{margin-left:8px}

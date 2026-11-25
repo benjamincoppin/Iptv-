@@ -9,13 +9,16 @@
   R.supported = function () { return !!(window.Native && Native.recAdd && Native.recList); };
 
   var cache = null, cacheAt = 0;
-  R.list = function () {
+  R.all = function () {
     if (!R.supported()) return [];
     if (cache && Date.now() - cacheAt < 2000) return cache;
     try { cache = JSON.parse(Native.recList()) || []; } catch (e) { cache = []; }
     cacheAt = Date.now();
     return cache;
   };
+  // recordings page = live recordings + replay downloads (films / episodes are on the Downloads page)
+  R.list = function () { return R.all().filter(function (r) { return r.mode !== 'vod'; }); };
+  R.invalidate = function () { cache = null; };
   function invalidate() { cache = null; }
 
   function live(r) { return r.status === 'scheduled' || r.status === 'recording'; }
@@ -369,6 +372,7 @@
     });
   };
 
+  R.util = { bar: bar, progressInfo: progressInfo, progress: progress, size: size, storageLine: storageLine, dateLabel: dateLabel };
   window.Recordings = R;
   if (window.Views) Views.recordings = R.view;
 })();
