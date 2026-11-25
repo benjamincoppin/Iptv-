@@ -55,6 +55,30 @@ public class RecordingService extends Service {
 
     public static boolean isActive(String id) { return jobs.containsKey(id); }
 
+    /** Live progress of the running jobs: {id: {written, total, speed, mode, start, end, startedAt}} */
+    public static String progressJson() {
+        JSONObject o = new JSONObject();
+        for (Job j : jobs.values()) {
+            try {
+                JSONObject p = new JSONObject();
+                p.put("written", j.written);
+                p.put("total", j.total);
+                p.put("speed", j.speed);
+                p.put("mode", j.rec.optString("mode", "live"));
+                p.put("start", j.rec.optLong("start"));
+                p.put("end", j.rec.optLong("end"));
+                p.put("startedAt", j.startedAt);
+                o.put(j.id, p);
+            } catch (Exception ignored) { }
+        }
+        return o.toString();
+    }
+
+    static String mb(long b) {
+        if (b >= 1000L * 1000 * 1000) return String.format(java.util.Locale.FRANCE, "%.1f Go", b / 1e9);
+        return Math.max(0, Math.round(b / 1e6)) + " Mo";
+    }
+
     @Override public IBinder onBind(Intent intent) { return null; }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -80,7 +104,10 @@ public class RecordingService extends Service {
         else startForeground(NOTIF_ID, n);
     }
 
-    private Notification buildNotification(String text) {
+    private Notification buildNotification(String text) { return buildNotification(text, -2); }
+
+    /** progress: -2 none, -1 indeterminate, 0..100 percent */
+    private Notification buildNotification(String text, int progress) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL) == null) {
             NotificationChannel ch = new NotificationChannel(CHANNEL, "Enregistrements", NotificationManager.IMPORTANCE_LOW);
@@ -89,20 +116,71 @@ public class RecordingService extends Service {
         Intent open = new Intent(this, MainActivity.class).setAction(Intent.ACTION_VIEW).setData(Uri.parse("iptvplus://recordings"));
         PendingIntent pi = PendingIntent.getActivity(this, 1, open, PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
         Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, CHANNEL) : new Notification.Builder(this);
-        return b.setSmallIcon(android.R.drawable.ic_media_play)
+        b.setSmallIcon(android.R.drawable.ic_media_play)
                 .setContentTitle("IPTV+ · Enregistrement")
                 .setContentText(text)
                 .setOngoing(true)
-                .setContentIntent(pi)
-                .build();
+                .setContentIntent(pi);
+        if (Build.VERSION.SDK_INT >= 20) b.setOnlyAlertOnce(true);
+        if (progress == -1) b.setProgress(0, 0, true);
+        else if (progress >= 0) b.setProgress(100, progress, false);
+        return b.build();
+    }
+
+    private long lastNotif = 0;
+
+    void onProgress() {
+        long now = System.currentTimeMillis();
+        if (now - lastNotif < 3000) return;
+        lastNotif = now;
+        refreshNotification();
     }
 
     void refreshNotification() {
-        List<String> names = new ArrayList<String>();
-        for (Job j : jobs.values()) names.add(j.rec.optString("title"));
-        String text = names.isEmpty() ? "Terminé" : (names.size() == 1 ? names.get(0) : names.size() + " enregistrements en cours");
+        List<Job> list = new ArrayList<Job>(jobs.values());
+        String text;
+        int progress = -2;
+        if (list.isEmpty()) text = "Terminé";
+        else if (list.size() > 1) text = list.size() + " enregistrements en cours";
+        else {
+            Job j = list.get(0);
+            String title = j.rec.optString("title");
+            if ("replay".equals(j.rec.optString("mode"))) {
+                if (j.total > 0) {
+                    progress = (int) Math.min(100, j.written * 100 / j.total);
+                    String eta = j.speed > 0 ? " · " + Math.max(1, (j.total - j.written) / j.speed / 60) + " min restantes" : "";
+                    text = title + " · " + progress + " % (" + mb(j.written) + " / " + mb(j.total) + ")" + eta;
+                } else { progress = -1; text = title + " · " + mb(j.written) + " reçus"; }
+            } else {
+                long st = j.rec.optLong("start"), en = j.rec.optLong("end"), now = System.currentTimeMillis();
+                if (en > st) progress = (int) Math.max(0, Math.min(100, (now - st) * 100 / (en - st)));
+                text = title + " · jusqu'à " + new java.text.SimpleDateFormat("HH:mm", java.util.Locale.FRANCE).format(new java.util.Date(en)) + " · " + mb(j.written);
+            }
+        }
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        nm.notify(NOTIF_ID, buildNotification(text));
+        nm.notify(NOTIF_ID, buildNotification(text, progress));
+    }
+
+    /** One-off notification when a recording / download ends. */
+    void notifyDone(JSONObject r) {
+        try {
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            String chId = "recordings_done";
+            if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(chId) == null)
+                nm.createNotificationChannel(new NotificationChannel(chId, "Enregistrements terminés", NotificationManager.IMPORTANCE_DEFAULT));
+            boolean ok = "done".equals(r.optString("status"));
+            boolean replay = "replay".equals(r.optString("mode"));
+            String title = ok ? (replay ? "Téléchargement terminé" : "Enregistrement terminé") : (replay ? "Échec du téléchargement" : "Échec de l'enregistrement");
+            String text = r.optString("title") + (ok ? " · " + mb(r.optLong("size")) : " · " + r.optString("error"));
+            if (r.optBoolean("replayPending")) text += " · nouvel essai depuis le replay";
+            Intent open = new Intent(this, MainActivity.class).setAction(Intent.ACTION_VIEW).setData(Uri.parse("iptvplus://recordings"));
+            PendingIntent pi = PendingIntent.getActivity(this, 2, open, PendingIntent.FLAG_UPDATE_CURRENT | (Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_IMMUTABLE : 0));
+            Notification.Builder b = Build.VERSION.SDK_INT >= 26 ? new Notification.Builder(this, chId) : new Notification.Builder(this);
+            b.setSmallIcon(ok ? android.R.drawable.stat_sys_download_done : android.R.drawable.stat_notify_error)
+                    .setContentTitle(title).setContentText(text).setAutoCancel(true).setContentIntent(pi);
+            if (Build.VERSION.SDK_INT >= 16) b.setStyle(new Notification.BigTextStyle().bigText(text));
+            nm.notify(5000 + (r.optString("id").hashCode() & 0xfff), b.build());
+        } catch (Throwable t) { Diag.log("Notification de fin : " + t); }
     }
 
     private void acquireLocks() {
@@ -148,8 +226,11 @@ public class RecordingService extends Service {
         final JSONObject rec;
         final String id;
         volatile boolean cancelled = false;
-        long written = 0;
-        long lastSave = 0;
+        volatile long written = 0;
+        volatile long total = -1;
+        volatile long speed = 0; // bytes per second
+        final long startedAt = System.currentTimeMillis();
+        long lastSave = 0, lastRate = 0, rateBytes = 0;
 
         Job(RecordingService svc, JSONObject rec) { this.svc = svc; this.rec = rec; this.id = rec.optString("id"); }
 
@@ -166,6 +247,7 @@ public class RecordingService extends Service {
                 out = t.stream;
                 RecStore.update(ctx, id, "file", t.uri);
                 RecStore.update(ctx, id, "name", t.name);
+                RecStore.update(ctx, id, "note", t.note == null ? "" : t.note);
                 Diag.log("Enregistrement démarré : " + rec.optString("title") + (replay ? " (depuis le replay)" : "") + " → " + t.name);
                 if (replay) downloadReplay(out);
                 else recordLive(out, end);
@@ -189,6 +271,7 @@ public class RecordingService extends Service {
                         if (!replay && cur.optString("replayUrl").length() > 0 && RecStore.planB(ctx)) cur.put("replayPending", true);
                     }
                     RecStore.put(ctx, cur);
+                    if (!cancelled) svc.notifyDone(cur);
                     if (cur.optBoolean("replayPending")) RecStore.tryReplay(ctx, cur, System.currentTimeMillis());
                 } catch (Exception ignored) { }
             }
@@ -198,7 +281,14 @@ public class RecordingService extends Service {
 
         private void progress() {
             long now = System.currentTimeMillis();
+            if (lastRate == 0) { lastRate = now; rateBytes = written; }
+            else if (now - lastRate >= 1000) {
+                long inst = (written - rateBytes) * 1000 / (now - lastRate);
+                speed = speed == 0 ? inst : (speed * 7 + inst * 3) / 10;
+                lastRate = now; rateBytes = written;
+            }
             if (now - lastSave > 10000) { lastSave = now; RecStore.update(svc, id, "size", written); }
+            svc.onProgress();
         }
 
         private void copy(Net.Response r, OutputStream out, long until) throws Exception {
@@ -289,6 +379,7 @@ public class RecordingService extends Service {
                     Net.Response r = Net.open(url, 20000, 60000);
                     try {
                         if (r.code >= 400 || r.body == null) throw new Exception("Replay indisponible (HTTP " + r.code + ")");
+                        if (r.length > 0) { total = r.length; RecStore.update(svc, id, "total", total); }
                         copy(r, out, 0);
                     } finally { r.close(); }
                     if (written > 0) return; // never restart a partial download (it would duplicate the beginning)

@@ -30,7 +30,7 @@ import java.util.Locale;
 public final class RecStorage {
     private RecStorage() { }
 
-    public static final class Target { public OutputStream stream; public String uri; public String name; }
+    public static final class Target { public OutputStream stream; public String uri; public String name; public String note; }
 
     /** Storage volumes IPTV+ can write to without any permission (one app folder per volume). */
     public static String volumes(Context ctx) {
@@ -84,6 +84,19 @@ public final class RecStorage {
         String name = fileName(rec);
         Target t = new Target();
         t.name = name;
+        if (spec.startsWith("smb://")) {
+            try {
+                Smb.Out o = Smb.create(ctx, spec, name);
+                t.stream = o.stream;
+                t.uri = o.uri;
+                return t;
+            } catch (Exception e) {
+                // computer asleep / off: never lose the recording, write it on the device instead
+                spec = autoSpec(ctx);
+                t.note = e.getMessage() + " : enregistré sur l'appareil à la place";
+                Diag.log("Dossier réseau indisponible (" + e.getMessage() + "), enregistrement local");
+            }
+        }
         if (spec.startsWith("content://")) {
             DocumentFile dir = DocumentFile.fromTreeUri(ctx, Uri.parse(spec));
             if (dir == null || !dir.canWrite()) throw new Exception("Dossier d'enregistrement inaccessible (clé USB débranchée ?)");
@@ -104,6 +117,7 @@ public final class RecStorage {
     }
 
     public static boolean delete(Context ctx, String uri) {
+        if (uri.startsWith("smb://")) return Smb.delete(ctx, uri);
         try {
             if (uri.startsWith("content://")) {
                 DocumentFile f = DocumentFile.fromSingleUri(ctx, Uri.parse(uri));
@@ -114,15 +128,48 @@ public final class RecStorage {
     }
 
     public static boolean exists(Context ctx, String uri) {
+        if (uri.startsWith("smb://")) return Smb.exists(ctx, uri);
         try {
             if (uri.startsWith("content://")) { DocumentFile f = DocumentFile.fromSingleUri(ctx, Uri.parse(uri)); return f != null && f.exists(); }
             return new File(Uri.parse(uri).getPath()).exists();
         } catch (Throwable t) { return false; }
     }
 
+    /** Size of a recording file, -1 if unknown. */
+    public static long length(Context ctx, String uri) {
+        try {
+            if (uri.startsWith("smb://")) return Smb.length(ctx, uri);
+            if (uri.startsWith("content://")) {
+                android.os.ParcelFileDescriptor pfd = ctx.getContentResolver().openFileDescriptor(Uri.parse(uri), "r");
+                try { return pfd.getStatSize(); } finally { pfd.close(); }
+            }
+            return new File(Uri.parse(uri).getPath()).length();
+        } catch (Throwable t) { return -1; }
+    }
+
+    /** Opens a recording for reading from the given byte offset. */
+    public static java.io.InputStream open(Context ctx, String uri, long offset) throws Exception {
+        if (uri.startsWith("smb://")) return Smb.open(ctx, uri, offset);
+        java.io.FileInputStream in;
+        if (uri.startsWith("content://")) {
+            final android.os.ParcelFileDescriptor pfd = ctx.getContentResolver().openFileDescriptor(Uri.parse(uri), "r");
+            in = new android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd);
+        } else {
+            in = new java.io.FileInputStream(new File(Uri.parse(uri).getPath()));
+        }
+        if (offset > 0) in.getChannel().position(offset);
+        return in;
+    }
+
+    /** URL the player can open. */
+    public static String playUrl(Context ctx, String uri) {
+        return uri.startsWith("smb://") ? Smb.playUrl(ctx, uri) : uri;
+    }
+
     public static String describe(Context ctx) {
         String spec = RecStore.folder(ctx);
         if (spec.length() == 0) return "Automatique";
+        if (spec.startsWith("smb://")) return Smb.describe(spec);
         if (spec.startsWith("content://")) {
             DocumentFile d = DocumentFile.fromTreeUri(ctx, Uri.parse(spec));
             return d != null && d.getName() != null ? "Dossier « " + d.getName() + " »" : "Dossier choisi";

@@ -15,6 +15,7 @@ android {
         targetSdk 34
         versionCode((System.getenv('VCODE') ?: '3') as int)
         versionName(System.getenv('VNAME') ?: '1.1.0')
+        multiDexEnabled true
         ndk {
             // ARM only: covers phones and Android TV boxes, keeps the APK smaller
             abiFilters 'armeabi-v7a', 'arm64-v8a'
@@ -46,6 +47,9 @@ android {
 
     packagingOptions {
         jniLibs { useLegacyPackaging true }
+        resources {
+            excludes += ['META-INF/versions/**', 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA', 'META-INF/BCKEY.*', 'META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
     }
 
     lint {
@@ -59,4 +63,5 @@ dependencies {
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.tvprovider:tvprovider:1.0.0'
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    implementation 'eu.agno3.jcifs:jcifs-ng:2.1.10'
 }

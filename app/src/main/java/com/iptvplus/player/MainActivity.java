@@ -547,6 +547,45 @@ public class MainActivity extends Activity {
 
         @JavascriptInterface public String recVolumes() { return RecStorage.volumes(MainActivity.this); }
 
+        @JavascriptInterface public String recProgress() { return RecordingService.progressJson(); }
+
+        @JavascriptInterface public String recPlayUrl(String id) {
+            JSONObject o = RecStore.get(MainActivity.this, id);
+            return o == null ? "" : RecStorage.playUrl(MainActivity.this, o.optString("file"));
+        }
+
+        // ---------- computer / NAS shared folder ----------
+        @JavascriptInterface public String smbConfig() { return Smb.publicConfig(MainActivity.this); }
+
+        /** Saves the settings, tests them, and uses the folder when the test works. Answer through NativeCache.done. */
+        @JavascriptInterface public void smbSave(final int id, final String json) {
+            pool.execute(new Runnable() {
+                @Override public void run() {
+                    try {
+                        String dir = Smb.save(MainActivity.this, new JSONObject(json));
+                        String err = Smb.test(MainActivity.this);
+                        if (err != null) { cacheDone(id, false, "", err); return; }
+                        RecStore.setFolder(MainActivity.this, dir);
+                        cacheDone(id, true, Smb.describe(dir), "");
+                    } catch (Throwable t) { cacheDone(id, false, "", String.valueOf(t.getMessage())); }
+                }
+            });
+        }
+
+        // ---------- local network share ----------
+        @JavascriptInterface public String shareStart() {
+            try { return ShareService.start(MainActivity.this); }
+            catch (Throwable t) {
+                JSONObject o = new JSONObject();
+                try { o.put("running", false); o.put("error", String.valueOf(t.getMessage())); } catch (Exception ignored) { }
+                return o.toString();
+            }
+        }
+
+        @JavascriptInterface public void shareStop() { ShareService.stop(MainActivity.this); }
+
+        @JavascriptInterface public String shareState() { return ShareServer.state(); }
+
         @JavascriptInterface public void recSetFolder(String spec) { RecStore.setFolder(MainActivity.this, spec); }
 
         @JavascriptInterface public boolean recPickFolder() {

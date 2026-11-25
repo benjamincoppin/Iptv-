@@ -62,6 +62,14 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Enregistrement d'un programme TV demandé par l'utilisateur sur son stockage" />
         </service>
+        <service
+            android:name=".ShareService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Partage des enregistrements de l'utilisateur vers son ordinateur sur le réseau local" />
+        </service>
         <receiver
             android:name=".RecAlarm"
             android:exported="true">

@@ -46,7 +46,8 @@ public final class Net {
         InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
         if (in != null && "gzip".equalsIgnoreCase(c.getContentEncoding())) in = new GZIPInputStream(in);
         r.body = in;
-        r.length = c.getContentLength();
+        r.length = -1;
+        try { String cl = c.getHeaderField("Content-Length"); if (cl != null) r.length = Long.parseLong(cl.trim()); } catch (Exception ignored) { }
         return r;
     }
 }
