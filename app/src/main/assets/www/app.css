@@ -429,3 +429,21 @@ body.kbd .lv .tsb.f.focused{background:var(--text);color:#111;box-shadow:none}
 body.kbd .recs .rrow.f.focused{box-shadow:0 0 0 3px var(--text);background:var(--card2)}
 @media (max-width:720px){.lv .tsbadge{top:12px;right:12px;font-size:13px}.recs .rrow .lg{width:48px;height:32px}}
 .recs .sh{margin:22px 0 10px}
+
+/* ---------- progression / partage / formulaires ---------- */
+.recs .rrow .nt{display:block;font-size:12px;margin-top:3px;color:#ffb74d}
+.recs .rrow .prog{display:block;margin-top:8px}
+.recs .pbar{display:block;height:6px;border-radius:3px;background:#2e2e35;overflow:hidden;max-width:420px}
+.recs .pbar i{display:block;height:100%;background:var(--accent);border-radius:3px;transition:width .8s}
+.recs .pbar.ind i{animation:pind 1.4s ease-in-out infinite}
+@keyframes pind{0%{margin-left:-30%}100%{margin-left:100%}}
+.recs .ptx{display:block;font-size:12px;color:var(--soft);margin-top:4px}
+.modal.mform{max-width:520px}
+.modal.mform .field{display:block;margin-bottom:12px}
+.modal.mform .field span{display:block;font-size:12px;color:var(--muted);margin-bottom:5px}
+.modal.mform .fbtns{display:flex;gap:10px;flex-wrap:wrap;margin-top:6px}
+.modal.mform .ferr{color:#ffb74d;font-size:13px;margin:0 0 10px}
+.sharebox{background:#111114;border-radius:10px;padding:16px;text-align:center}
+.sharebox .su{font-size:24px;font-weight:700;letter-spacing:.3px;word-break:break-all}
+.sharebox .sp{margin-top:8px;font-size:15px;color:var(--soft)}
+.sharebox .sp b{font-size:26px;letter-spacing:6px;color:var(--accent);margin-left:6px}

@@ -126,11 +126,53 @@
   R.stop = function (id) { Native.recStop(id); invalidate(); };
 
   R.play = function (r) {
-    Player.start({ kind: 'recording', url: r.file, title: r.title, sub: r.channel + ' · ' + dateLabel(r.progStart || r.start), startMs: 0 });
+    var url = r.file;
+    try { if (Native.recPlayUrl) url = Native.recPlayUrl(r.id) || r.file; } catch (e) { }
+    Player.start({ kind: 'recording', url: url, title: r.title, sub: r.channel + ' · ' + dateLabel(r.progStart || r.start), startMs: 0 });
   };
 
+  // ---------- progression ----------
+  function progress() {
+    try { return Native.recProgress ? JSON.parse(Native.recProgress()) : {}; } catch (e) { return {}; }
+  }
+  function eta(sec) {
+    sec = Math.round(sec);
+    if (sec < 60) return 'moins d\'1 min';
+    var m = Math.round(sec / 60);
+    return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + U.pad(m % 60);
+  }
+  // { pct (0-100 or -1 when unknown), text }
+  function progressInfo(r, p) {
+    var now = Date.now();
+    if (!p) return null;
+    if (p.mode === 'replay') {
+      var speed = p.speed > 0 ? size(p.speed) + '/s' : '';
+      if (p.total > 0) {
+        var pct = Math.min(100, Math.floor(p.written * 100 / p.total));
+        return { pct: pct, text: pct + ' % · ' + size(p.written) + ' / ' + size(p.total) + (speed ? ' · ' + speed : '') + (p.speed > 0 ? ' · reste ' + eta((p.total - p.written) / p.speed) : '') };
+      }
+      return { pct: -1, text: size(p.written) + ' reçus' + (speed ? ' · ' + speed : '') };
+    }
+    var st = p.start, en = p.end, span = en - st;
+    var pc = span > 0 ? Math.max(0, Math.min(100, Math.floor((now - st) * 100 / span))) : -1;
+    return { pct: pc, text: Math.max(0, Math.round((now - st) / 60000)) + ' min sur ' + Math.round(span / 60000) + ' · ' + (size(p.written) || '0 Mo') + ' · fin à ' + U.hm(en) };
+  }
+  function bar(info) {
+    if (!info) return '';
+    return '<span class="pbar' + (info.pct < 0 ? ' ind' : '') + '"><i style="width:' + (info.pct < 0 ? 30 : info.pct) + '%"></i></span><span class="ptx">' + U.esc(info.text) + '</span>';
+  }
+  function updateBars(page) {
+    var prog = progress(), ids = Object.keys(prog);
+    U.$$('.rrow[data-id]', page).forEach(function (row) {
+      var p = prog[row.dataset.id], box = U.$('.prog', row);
+      if (!box) return;
+      box.innerHTML = bar(progressInfo(null, p));
+    });
+    return ids.length;
+  }
+
   function statusLabel(r) {
-    if (r.status === 'recording' || r.active) return (r.mode === 'replay' ? '⬇ Téléchargement du replay' : '● Enregistrement en cours') + (r.size ? ' · ' + size(r.size) : '');
+    if (r.status === 'recording' || r.active) return r.mode === 'replay' ? '⬇ Téléchargement du replay' : '● Enregistrement en cours';
     if (r.status === 'scheduled') return r.mode === 'replay' ? 'Replay à télécharger' : 'Programmé';
     if (r.status === 'done') return (r.exists === false ? 'Fichier introuvable (clé débranchée ?)' : 'Terminé') + (r.size ? ' · ' + size(r.size) : '') + (r.mode === 'replay' ? ' · depuis le replay' : '') + (r.error ? ' · ' + r.error : '');
     if (r.status === 'cancelled') return 'Annulé';
@@ -150,11 +192,15 @@
     }
     if (Native.recCheck) Native.recCheck();
     draw(page, true);
+    var tick = 0, wasActive = false;
     timer = setInterval(function () {
       if (!page.isConnected) { clearInterval(timer); return; }
-      if (Modal.isOpen()) return;
-      draw(page, false);
-    }, 5000);
+      tick++;
+      var active = updateBars(page);
+      // full redraw when a job starts / ends, and every 10 s for the statuses
+      if ((active > 0) !== wasActive || tick % 7 === 0) { if (!Modal.isOpen()) draw(page, false); }
+      wasActive = active > 0;
+    }, 1500);
     return Promise.resolve();
   };
 
@@ -180,7 +226,8 @@
       { t: 'Problèmes', f: function (r) { return (r.status === 'failed' || r.status === 'missed') && !r.active; } }
     ];
     var html = '<div class="recs"><div class="rhead"><div><h1>Enregistrements</h1><p class="muted">' + U.esc(storageLine()) + '</p></div>' +
-      '<div class="nav-group" style="display:flex;gap:10px"><button class="f btn" data-a="settings" data-key="rset">Réglages</button><button class="f btn" data-a="guide" data-key="rguide">Programmer depuis le guide</button></div></div>';
+      '<div class="nav-group" style="display:flex;gap:10px;flex-wrap:wrap"><button class="f btn' + (shareOn() ? ' primary' : '') + '" data-a="share" data-key="rshare">' + (shareOn() ? 'Partage actif' : 'Partage sur le réseau') + '</button><button class="f btn" data-a="settings" data-key="rset">Réglages</button><button class="f btn" data-a="guide" data-key="rguide">Programmer depuis le guide</button></div></div>';
+    var prog = progress();
     var any = false;
     groups.forEach(function (g) {
       var items = list.filter(g.f).sort(function (a, b) { return g.sort ? a.start - b.start : (b.progStart || b.start) - (a.progStart || a.start); });
@@ -191,13 +238,17 @@
           '<span class="lg">' + (r.icon ? U.img(r.icon) : '') + '</span>' +
           '<span class="tx"><span class="t">' + U.esc(r.title || '') + '</span>' +
           '<span class="d">' + U.esc(r.channel + ' · ' + dateLabel(r.progStart || r.start) + ' – ' + U.hm(r.end)) + '</span>' +
-          '<span class="s">' + U.esc(statusLabel(r)) + '</span></span></button>';
+          '<span class="s">' + U.esc(statusLabel(r)) + '</span>' +
+          (r.note ? '<span class="nt">' + U.esc(r.note) + '</span>' : '') +
+          (r.status === 'recording' || r.active ? '<span class="prog">' + bar(progressInfo(r, prog[r.id])) + '</span>' : '') +
+          '</span></button>';
       }).join('') + '</div>';
     });
     if (!any) html += '<div class="empty" style="margin-top:30px">Aucun enregistrement.<br><br>Dans le <b>Guide TV</b>, choisis un programme puis « Enregistrer ».<br>En <b>TV en direct</b>, maintiens OK sur une chaîne puis « Enregistrer le programme en cours ».</div>';
     html += '<p class="muted rnote">Pour un enregistrement programmé, laisse l\'appareil en veille normale (pas débranché). L\'appli le réveille à l\'heure prévue ; s\'il était éteint, le programme est récupéré depuis le replay quand la chaîne le propose.</p></div>';
     page.innerHTML = html;
     U.$('[data-a="settings"]', page).onclick = function () { R.settings(function () { draw(page, false); }); };
+    U.$('[data-a="share"]', page).onclick = function () { R.share(function () { draw(page, false); }); };
     U.$('[data-a="guide"]', page).onclick = function () { App.go('guide'); };
     U.$$('.rrow', page).forEach(function (b) {
       b.addEventListener('click', function () { actions(list.filter(function (r) { return r.id === b.dataset.id; })[0], page); });
@@ -226,6 +277,57 @@
     });
   }
 
+  // ---------- partage sur le réseau local ----------
+  function shareState() { try { return Native.shareState ? JSON.parse(Native.shareState()) : {}; } catch (e) { return {}; } }
+  function shareOn() { return !!shareState().running; }
+
+  R.share = function (done) {
+    if (!Native.shareStart) { U.toast('Disponible dans l\'appli Android'); return; }
+    var st = shareState();
+    if (!st.running) {
+      st = JSON.parse(Native.shareStart());
+      if (!st.running) { U.toast(st.error || 'Impossible de démarrer le partage'); return; }
+    }
+    Modal.form('Partage sur le réseau',
+      '<p class="muted" style="font-size:13px;line-height:1.55;margin:0 0 14px">Sur ton ordinateur (connecté à la même box), ouvre le navigateur à cette adresse puis saisis le code :</p>' +
+      '<div class="sharebox"><div class="su">' + U.esc(st.url) + '</div><div class="sp">Code <b>' + U.esc(st.pin) + '</b></div></div>' +
+      '<p class="muted" style="font-size:12px;line-height:1.5;margin:14px 0 4px">Tu y trouveras tes enregistrements terminés avec un bouton « Télécharger ». Le partage reste actif quand tu quittes cette page et s\'arrête tout seul après 1 h sans activité.</p>',
+      null,
+      [{ label: 'OK', value: 'ok', primary: true }, { label: 'Arrêter le partage', value: 'stop' }],
+      function (v) {
+        if (v === 'stop') { Native.shareStop(); U.toast('Partage arrêté'); }
+        if (done) setTimeout(done, 50);
+      });
+  };
+
+  // ---------- dossier partagé d'un ordinateur / NAS ----------
+  R.smbSetup = function (cb) {
+    var c = {};
+    try { c = JSON.parse(Native.smbConfig()); } catch (e) { }
+    Modal.form('Dossier partagé d\'un ordinateur',
+      '<p class="muted" style="font-size:13px;line-height:1.55;margin:0 0 12px">Les enregistrements seront écrits directement dans ce dossier. L\'ordinateur doit être allumé pendant l\'enregistrement ; sinon, il est fait sur l\'appareil à la place.</p>',
+      [
+        { key: 'address', label: 'Adresse du dossier partagé', value: c.address || '', placeholder: '\\\\192.168.1.20\\Videos' },
+        { key: 'user', label: 'Utilisateur de l\'ordinateur', value: c.user || '', placeholder: 'ex. benjamin ou adresse Microsoft' },
+        { key: 'pass', label: c.hasPass ? 'Mot de passe (laisser vide pour garder l\'actuel)' : 'Mot de passe', value: '', type: 'password' }
+      ],
+      [{ label: 'Tester et utiliser', value: 'save', primary: true }, { label: 'Annuler', value: 'no' }],
+      function (v, vals, dlg) {
+        if (v !== 'save') return true;
+        if (!vals.address.trim()) { dlg.error('Indique l\'adresse du dossier partagé'); return false; }
+        dlg.error(''); dlg.busy(true, 'Test en cours…');
+        API.nativeCall('smbSave', JSON.stringify(vals)).then(function (label) {
+          dlg.close();
+          U.toast('Enregistrements : ' + label);
+          if (cb) cb();
+        }, function (e) {
+          dlg.busy(false, 'Tester et utiliser');
+          dlg.error(e.message);
+        });
+        return false;
+      });
+  };
+
   // ---------- réglages ----------
   R.settings = function (done) {
     var st = {};
@@ -252,8 +354,10 @@
     try { vols = JSON.parse(Native.recVolumes()); } catch (e) { }
     var opts = [{ label: 'Automatique (la clé USB si elle est branchée)', value: '' }].concat(vols.map(function (v) {
       return { label: v.label + (v.free ? ' · ' + size(v.free) + ' libres' : ''), value: v.spec };
-    })).concat([{ label: 'Choisir un dossier…', value: '__pick' }]);
+    })).concat([{ label: 'Choisir un dossier…', value: '__pick' }])
+      .concat(Native.smbSave ? [{ label: 'Dossier partagé d\'un ordinateur (réseau)…', value: '__smb' }] : []);
     Modal.choose('Emplacement des enregistrements', opts, function (spec) {
+      if (spec === '__smb') return R.smbSetup(cb);
       if (spec === '__pick') {
         R.onFolder = function () { R.onFolder = null; if (cb) cb(); };
         if (!Native.recPickFolder()) { R.onFolder = null; U.toast('Le sélecteur de dossier n\'est pas disponible sur cet appareil : choisis un stockage dans la liste'); }

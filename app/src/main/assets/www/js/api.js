@@ -123,6 +123,13 @@
       Native[method](id, url, key);
     });
   }
+  API.nativeCall = function (method, a, b) {
+    return new Promise(function (resolve, reject) {
+      var id = ++diskId;
+      diskReqs[id] = function (ok, r, e) { if (ok) resolve(r); else reject(new Error(e || 'échec')); };
+      Native[method](id, a, b);
+    });
+  };
   function readFile(path) {
     return new Promise(function (resolve, reject) {
       var x = new XMLHttpRequest();

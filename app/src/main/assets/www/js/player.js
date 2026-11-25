@@ -450,6 +450,41 @@
       inp.addEventListener('keydown', function (e) { if (e.keyCode === 13 && !document.body.classList.contains('kbd')) ok(); });
       Nav.focus(inp);
     },
+    // Free-form dialog: html body, buttons [{label, value, primary}], optional fields [{key, label, value, type, placeholder}]
+    form: function (title, html, fields, buttons, cb) {
+      var self = this;
+      self.close();
+      var host = document.getElementById('layer');
+      var standalone = !host.classList.contains('on');
+      if (standalone) host.classList.add('on');
+      self._standalone = standalone;
+      self._prevFocus = Nav.current;
+      self._prevHandler = Nav.handler;
+      Nav.handler = null;
+      var bg = U.html('<div class="modal-bg"><div class="modal nav-group mform"><h3>' + U.esc(title) + '</h3>' + (html || '') +
+        (fields || []).map(function (f) {
+          return '<label class="field"><span>' + U.esc(f.label) + '</span><input class="f" data-k="' + U.esc(f.key) + '" type="' + (f.type || 'text') + '" autocapitalize="off" autocomplete="off" spellcheck="false" data-submit="1" placeholder="' + U.esc(f.placeholder || '') + '" value="' + U.esc(f.value || '') + '"></label>';
+        }).join('') +
+        '<p class="ferr" style="display:none"></p><div class="fbtns">' + buttons.map(function (b, i) { return '<button class="f btn' + (b.primary ? ' primary' : '') + '" data-b="' + i + '">' + U.esc(b.label) + '</button>'; }).join('') + '</div></div></div>');
+      host.appendChild(bg);
+      self._el = bg;
+      Nav.pushRoot(bg);
+      function values() { var v = {}; U.$$('input[data-k]', bg).forEach(function (i) { v[i.dataset.k] = i.value; }); return v; }
+      var api = {
+        el: bg,
+        error: function (m) { var e = U.$('.ferr', bg); e.textContent = m || ''; e.style.display = m ? '' : 'none'; },
+        busy: function (on, label) { U.$$('.fbtns button', bg).forEach(function (b) { b.disabled = !!on; }); if (label) U.$('.fbtns .primary', bg).textContent = label; },
+        close: function () { self.close(); }
+      };
+      U.$$('.fbtns button', bg).forEach(function (b) {
+        b.onclick = function () { var bt = buttons[+b.dataset.b]; if (cb(bt.value, values(), api) !== false) self.close(); };
+      });
+      U.$$('input[data-k]', bg).forEach(function (inp) {
+        inp.addEventListener('submit-input', function () { var nx = inp.closest('label').nextElementSibling; var n = nx && U.$('input', nx); Nav.focus(n || U.$('.fbtns .primary', bg) || U.$('.fbtns button', bg)); });
+      });
+      Nav.focus(U.$('input[data-k]', bg) || U.$('.fbtns .primary', bg) || U.$('.fbtns button', bg));
+      return api;
+    },
     close: function () {
       if (!this._el) return;
       Nav.popRoot(this._el);
