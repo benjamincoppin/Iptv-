@@ -157,7 +157,17 @@
   App.onAppPause = function () {
     if (Player.open) { try { var s = JSON.parse(Native.state()); if (s.pos) Player._pausedAt = s.pos; } catch (e) { } }
   };
+  // Reload the catalogue when it is more than 12 hours old (checked every 10 min and when the app comes back)
+  App.checkCatalog = function () {
+    if (!API.account || !API.isStale()) return;
+    if (Player.open || Live.open || Modal.isOpen()) return; // never interrupt playback: retried at the next check
+    API.reloadCatalog();
+    if (App.route === 'home' || App.route === 'movies' || App.route === 'series') App.refresh();
+  };
+  setInterval(App.checkCatalog, 10 * 60 * 1000);
+
   App.onAppResume = function () {
+    App.checkCatalog();
     if (window.Sync) Sync.refresh(10000);
     if (Live.open) { /* restart current live stream after the app comes back */ Native.resume(); }
   };

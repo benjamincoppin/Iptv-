@@ -104,6 +104,7 @@
 
   function cached(key, action, extra) {
     if (API.cache[key]) return API.cache[key];
+    if (!API.loadedAt) API.loadedAt = Date.now();
     var p = getJson(base() + '&action=' + action + (extra || '')).then(function (r) {
       return Array.isArray(r) ? r : (r && typeof r === 'object' ? Object.keys(r).map(function (k) { return r[k]; }) : []);
     });
@@ -111,6 +112,14 @@
     p.catch(function () { delete API.cache[key]; });
     return p;
   }
+
+  // Catalogue automatically reloaded every 12 hours (new movies, series, channels)
+  API.RELOAD_MS = 12 * 3600 * 1000;
+  API.isStale = function () { return !!API.loadedAt && Date.now() - API.loadedAt > API.RELOAD_MS; };
+  API.reloadCatalog = function () {
+    API.cache = {}; API.epgCache = {}; API.loadedAt = 0;
+    return API.refreshInfo().catch(function () { });
+  };
 
   API.categories = function (kind) { // kind: live | vod | series
     return cached('cat_' + kind, 'get_' + kind + '_categories');
