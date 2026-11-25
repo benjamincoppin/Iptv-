@@ -32,7 +32,13 @@
     if (entry.key || entry.scroll) params._restore = { key: entry.key, scroll: entry.scroll };
     var token = {};
     App._token = token;
-    return Promise.resolve(view(page, params)).then(function () {
+    // Each page draws into its own container: a slow page that finishes loading after the user
+    // has moved on writes into a detached element and can no longer overwrite the new page.
+    page.innerHTML = '';
+    var box = document.createElement('div');
+    box.className = 'view view-' + entry.route;
+    page.appendChild(box);
+    return Promise.resolve(view(box, params)).then(function () {
       if (App._token !== token) return;
       if (params._restore) {
         page.scrollTop = params._restore.scroll || 0;
@@ -47,8 +53,9 @@
       page.scrollTop = 0;
     }).catch(function (e) {
       console.error(e);
-      page.innerHTML = '<div class="empty">Erreur : ' + U.esc(e.message || e) + '<br><br><button class="f btn" id="retry">Réessayer</button></div>';
-      var r = U.$('#retry', page); r.onclick = function () { API.cache = {}; render(entry); };
+      if (App._token !== token) return;
+      box.innerHTML = '<div class="empty">Erreur : ' + U.esc(e.message || e) + '<br><br><button class="f btn" id="retry">Réessayer</button></div>';
+      var r = U.$('#retry', box); r.onclick = function () { API.cache = {}; render(entry); };
       Nav.focus(r);
     });
   }

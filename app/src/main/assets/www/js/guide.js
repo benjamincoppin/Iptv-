@@ -12,6 +12,7 @@
     page.innerHTML = '<div class="spinner"></div>';
     if (window.matchMedia('(max-width:720px)').matches) PX = 4; else PX = 5;
     return Promise.all([API.categories('live'), API.liveStreams()]).then(function (r) {
+      if (!page.isConnected || root !== page) return; // the user already left the guide
       all = Cats.filterItems('live', r[1]); byCat = {};
       all.forEach(function (s) { (byCat[s.category_id] = byCat[s.category_id] || []).push(s); });
       cats = Cats.apply('live', r[0]).filter(function (c) { return byCat[c.category_id]; }).map(function (c) { return { id: c.category_id, name: c.category_name }; });
@@ -20,6 +21,7 @@
       catId = cats.some(function (c) { return String(c.id) === String(saved); }) ? saved : (cats[0] && cats[0].id);
       build();
     }).catch(function (e) {
+      if (!page.isConnected) return; // the user already left the guide
       page.innerHTML = '<div class="empty">Impossible de charger le guide : ' + U.esc(e.message) + '</div>';
     });
   };

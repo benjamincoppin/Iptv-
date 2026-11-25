@@ -388,3 +388,7 @@ body.kbd .skipbtn.f.focused{box-shadow:0 0 0 3px var(--accent);transform:scale(1
   .pl .top h2{font-size:18px}
   .skipbtn{bottom:190px;right:16px}
 }
+
+/* page containers */
+.view{min-height:100%}
+.view-guide,.view-login,.view-profiles{height:100%}
