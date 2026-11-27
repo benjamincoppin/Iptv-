@@ -283,8 +283,8 @@
     API.epgCache[k] = { t: now, p: p };
     return p;
   };
-  API.nowNext = function (list) {
-    var now = Date.now(), cur = null, next = null;
+  API.nowNext = function (list, at) {
+    var now = at || Date.now(), cur = null, next = null;
     for (var i = 0; i < list.length; i++) {
       if (list[i].start <= now && list[i].end > now) { cur = list[i]; next = list[i + 1] || null; break; }
       if (list[i].start > now) { next = list[i]; break; }

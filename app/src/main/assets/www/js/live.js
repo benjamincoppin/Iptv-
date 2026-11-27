@@ -68,7 +68,7 @@
         '<div class="chans nav-group" data-pad-top="40"><div class="chead"><button class="ph catpick f"></button><button class="f aspbtn" aria-label="Format d\'image">' + ASPECT_ICON + '<span></span></button></div><div class="tsctl"></div><div class="clist"></div></div>' +
       '</div>' +
       '<div class="tsbadge" style="display:none"></div>' +
-      '<div class="infobar"><div class="l1"><span class="cn"></span><span class="tm"></span><span class="rec" style="display:none">● REC</span><span class="q"></span></div><div class="now"></div><div class="pb"><i style="width:0"></i></div><div class="nx"></div></div>' +
+      '<div class="infobar"><div class="l1"><span class="cn"></span><span class="tm"></span><span class="rec" style="display:none">● REC</span><span class="q"></span></div><div class="now"></div><div class="pb"><b style="width:0"></b><i style="width:0"></i></div><div class="nx"></div></div>' +
       '<div class="loading" style="display:none"><div class="spinner"></div></div>');
     U.$$('.cat', el).forEach(function (b) { b.addEventListener('click', function () { selectCat(b.dataset.c, true); }); });
     el.querySelector('.aspbtn').addEventListener('click', function () { Aspect.choose('live', updateAspectBtn); });
@@ -261,13 +261,25 @@
     ib.querySelector('.q').textContent = (s._fmt || '').toUpperCase() + (Fav.has('live', s.stream_id) ? '  ★' : '');
     var rec = window.Recordings && Recordings.activeFor(s.stream_id);
     ib.querySelector('.rec').style.display = rec ? '' : 'none';
-    API.epg(s.stream_id, 4).then(function (ep) {
+    // In pause / rewind, show the programme being watched (it may be an earlier one)
+    var lag = behind(), at = Date.now() - lag;
+    var src;
+    if (lag > 30000) {
+      var g = API.guideFor && API.guideFor(s.stream_id);
+      src = g ? Promise.resolve(g) : (canRewind() ? API.fullEpg(s.stream_id).catch(function () { return API.epg(s.stream_id, 4); }) : API.epg(s.stream_id, 4));
+    } else src = API.epg(s.stream_id, 4);
+    src.then(function (ep) {
       if (!el || playing !== s) return;
-      var nn = API.nowNext(ep);
-      ib.querySelector('.tm').textContent = nn.now ? U.hm(nn.now.start) + ' – ' + U.hm(nn.now.end) : U.hm(new Date());
+      var nn = API.nowNext(ep, at);
+      ib.querySelector('.tm').textContent = nn.now ? U.hm(nn.now.start) + ' – ' + U.hm(nn.now.end) : U.hm(new Date(at));
       ib.querySelector('.now').textContent = nn.now ? nn.now.title : 'Programme non disponible';
-      var pct = nn.now ? Math.min(100, (Date.now() - nn.now.start) / (nn.now.end - nn.now.start) * 100) : 0;
+      var span = nn.now ? nn.now.end - nn.now.start : 0;
+      var pct = span > 0 ? Math.max(0, Math.min(100, (at - nn.now.start) / span * 100)) : 0;
+      // lighter part = what is already aired (up to the live point) when watching behind live
+      var livePct = span > 0 && lag > 30000 ? Math.max(0, Math.min(100, (Date.now() - nn.now.start) / span * 100)) : 0;
       ib.querySelector('.pb i').style.width = pct + '%';
+      var ghost = ib.querySelector('.pb b');
+      if (ghost) ghost.style.width = livePct + '%';
       ib.querySelector('.nx').textContent = nn.next ? 'Ensuite : ' + U.hm(nn.next.start) + ' ' + nn.next.title : '';
     });
   }
@@ -366,10 +378,11 @@
 
   function updateTs() {
     if (!el) return;
+    updateInfo();
     var ctl = el.querySelector('.tsctl');
     clearInterval(tsTimer); tsTimer = null;
     updateBadge();
-    if (shift && shift.paused) tsTimer = setInterval(updateBadge, 15000);
+    if (shift && shift.paused) tsTimer = setInterval(function () { updateBadge(); updateInfo(); }, 15000);
     if (ctl && playing) {
       var focusedTs = Nav.current && ctl.contains(Nav.current) ? Nav.current.dataset.ts : null;
       var rec = window.Recordings && Recordings.supported() && Recordings.activeFor(playing.stream_id);

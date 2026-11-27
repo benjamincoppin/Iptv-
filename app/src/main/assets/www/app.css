@@ -456,3 +456,6 @@ body.kbd .recs .rrow.f.focused{box-shadow:0 0 0 3px var(--text);background:var(-
 .ep .dlb.ok{background:#2e7d32}
 .ep .dlb.ko{background:#c62828}
 .chip.dlseason{margin-left:8px}
+.lv .infobar .pb{position:relative}
+.lv .infobar .pb b{position:absolute;left:0;top:0;bottom:0;background:rgba(255,255,255,.28)}
+.lv .infobar .pb i{position:relative}
